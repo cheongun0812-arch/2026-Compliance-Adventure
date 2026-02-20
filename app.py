@@ -5,20 +5,23 @@ from datetime import datetime
 # --- 1. 페이지 설정 및 디자인 ---
 st.set_page_config(page_title=2026 컴플라이언스 어드벤처, layout=wide)
 
-# CSS 주입 게임 테마 및 버튼 디자인
-st.markdown(
+# CSS 주입: f-string을 사용하지 않아 SyntaxError를 원천 차단합니다.
+st.markdown("""
     <style>
-    .stApp { background-color: #0E1117; color: #E0E0E0; }
+    .stApp { 
+        background-color: #0E1117; 
+        color: #E0E0E0; 
+    }
     div.stButton > button:first-child {
-        background-color: #00C853; 
-        color: white; 
-        border-radius: 10px;
-        font-size: 20px; 
-        font-weight: bold; 
-        width: 100%; 
-        height: 60px;
-        box-shadow: 0 0 15px rgba(0, 200, 83, 0.4);
-        border: none;
+        background-color: #00C853 !important; 
+        color: white !important; 
+        border-radius: 10px !important;
+        font-size: 20px !important; 
+        font-weight: bold !important; 
+        width: 100% !important; 
+        height: 60px !important;
+        box-shadow: 0 0 15px rgba(0, 200, 83, 0.4) !important;
+        border: none !important;
     }
     .status-box {
         background-color: #1A1C24; 
@@ -163,3 +166,4 @@ elif st.session_state.stage == 'ending'
         st.session_state.clear()
 
         st.rerun()
+
