@@ -7,19 +7,28 @@ st.set_page_config(page_title=2026 컴플라이언스 어드벤처, layout=wide)
 
 # CSS 주입 게임 테마 및 버튼 디자인
 st.markdown(
-    style
-    .stApp { background-color #0E1117; color #E0E0E0; }
-    div.stButton  buttonfirst-child {
-        background-color #00C853; color white; border-radius 10px;
-        font-size 20px; font-weight bold; width 100%; height 60px;
-        box-shadow 0 0 15px rgba(0, 200, 83, 0.4);
+    <style>
+    .stApp { background-color: #0E1117; color: #E0E0E0; }
+    div.stButton > button:first-child {
+        background-color: #00C853; 
+        color: white; 
+        border-radius: 10px;
+        font-size: 20px; 
+        font-weight: bold; 
+        width: 100%; 
+        height: 60px;
+        box-shadow: 0 0 15px rgba(0, 200, 83, 0.4);
+        border: none;
     }
     .status-box {
-        background-color #1A1C24; padding 20px; border-radius 15px;
-        border-left 5px solid #00C853; margin-bottom 20px;
+        background-color: #1A1C24; 
+        padding: 20px; 
+        border-radius: 15px;
+        border-left: 5px solid #00C853; 
+        margin-bottom: 20px;
     }
-    style
-    , unsafe_allow_html=True)
+    </style>
+    """, unsafe_allow_html=True)
 
 # --- 2. 시스템 상태 초기화 ---
 if 'stage' not in st.session_state
@@ -152,4 +161,5 @@ elif st.session_state.stage == 'ending'
 
     if st.button(처음으로 돌아가기)
         st.session_state.clear()
+
         st.rerun()
