@@ -32,10 +32,10 @@ if 'stage' not in st.session_state:
     st.session_state.completed = []
     st.session_state.user_info = {}
 
-# --- 3. 이미지 에셋 (제가 생성해 드린 이미지들입니다) ---
+# --- 3. 이미지 에셋 (내 깃허브에 올린 파일 경로로 수정) ---
 IMAGES = {
-    "world_map": "https://r.jina.ai/i/06be6331908a4628a50f111534f40f0c",
-    "clean_master": "https://r.jina.ai/i/9c458793b80b4396b27d49833503953e", # 클린 마스터 캐릭터
+    "world_map": "world_map.png",
+    "clean_master": "master.png",
 }
 
 # --- 4. 시나리오 데이터 ---
@@ -144,3 +144,4 @@ elif st.session_state.stage == 'ending':
     if st.button("처음으로 돌아가기"):
         st.session_state.clear()
         st.rerun()
+
