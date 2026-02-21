@@ -4,6 +4,8 @@ from pathlib import Path
 import csv
 import io
 import time
+import base64
+import pandas as pd
 
 # =========================================================
 # 1) 페이지 설정 / 스타일
@@ -80,70 +82,58 @@ div.stButton > button:first-child:hover {
     margin-bottom: 6px;
 }
 
-/* Guardian Map 상태 배지 */
-.map-grid {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 10px;
-    margin-top: 8px;
+/* 맵 전환 페이드 효과 */
+@keyframes mapFadeIn {
+    0%   { opacity: 0; transform: scale(0.995); }
+    100% { opacity: 1; transform: scale(1); }
 }
-.map-node {
-    border: 1px solid #2A3140;
+.map-fade-wrap {
+    width: 100%;
+    margin-bottom: 4px;
+}
+.map-fade-img {
+    width: 100%;
+    height: auto;
     border-radius: 12px;
-    padding: 10px;
-    background: #141922;
-    min-height: 82px;
-}
-.node-locked {
-    opacity: 0.6;
-}
-.node-open {
-    border-color: #00C853;
-    box-shadow: 0 0 0 1px rgba(0,200,83,0.15) inset;
-    animation: pulseGlow 1.6s infinite;
-}
-.node-clear {
-    border-color: #4FC3F7;
-    box-shadow: 0 0 10px rgba(79,195,247,0.18);
-    background: #13202A;
-}
-@keyframes pulseGlow {
-    0% { box-shadow: 0 0 0 0 rgba(0,200,83,0.20); }
-    70% { box-shadow: 0 0 0 8px rgba(0,200,83,0.00); }
-    100% { box-shadow: 0 0 0 0 rgba(0,200,83,0.00); }
-}
-
-/* 정복 연출 */
-.fx-box {
-    background: linear-gradient(135deg, #102313, #152B1A);
-    border: 1px solid #2F7D32;
-    border-radius: 14px;
-    padding: 12px 14px;
-    margin-bottom: 10px;
-    color: #E8F5E9;
-    font-weight: 700;
+    animation: mapFadeIn 0.28s ease-out;
+    display: block;
 }
 </style>
 """, unsafe_allow_html=True)
 
-
 # =========================================================
 # 2) 파일 경로 / 에셋
+#    (이미지/사운드 모두 app.py와 같은 폴더에 있다고 가정)
 # =========================================================
 BASE_DIR = Path(__file__).parent if "__file__" in globals() else Path.cwd()
 ASSET_DIR = BASE_DIR
 LOG_FILE = BASE_DIR / "compliance_training_log.csv"
 
-# 기본 맵 + 단계별 맵(선택)
 MAP_STAGE_IMAGES = {
     0: ASSET_DIR / "world_map_0.png",
     1: ASSET_DIR / "world_map_1.png",
     2: ASSET_DIR / "world_map_2.png",
     3: ASSET_DIR / "world_map_3.png",
 }
-DEFAULT_MAP_IMAGE = ASSET_DIR / "world_map.png"
+DEFAULT_MAP_IMAGE = ASSET_DIR / "world_map.png"  # 선택 (fallback)
 MASTER_IMAGE = ASSET_DIR / "master.png"
 
+# --- 관리자 통계/채점 기준 ---
+TEXT_CORRECT_THRESHOLD = 0.7  # 주관식 점수율 70% 이상이면 '정답'으로 집계
+
+# --- 사운드 / 아이콘 자원 ---
+SFX = {
+    "correct": BASE_DIR / "sfx_correct.mp3",
+    "wrong": BASE_DIR / "sfx_wrong.mp3",
+    "conquer": BASE_DIR / "sfx_conquer.mp3",
+    "final": BASE_DIR / "sfx_final.mp3",
+}
+
+THEME_ICONS = {
+    "subcontracting": "🚜",
+    "security": "🔐",
+    "fairtrade": "🏰",
+}
 
 # =========================================================
 # 3) 콘텐츠 데이터 (브리핑 + 퀴즈)
@@ -224,7 +214,6 @@ SCENARIOS = {
             }
         ]
     },
-
     "security": {
         "title": "🔐 보안의 요새",
         "territory_name": "보안의 요새",
@@ -297,7 +286,6 @@ SCENARIOS = {
             }
         ]
     },
-
     "fairtrade": {
         "title": "🏰 공정의 성",
         "territory_name": "공정의 성",
@@ -359,7 +347,7 @@ SCENARIOS = {
             },
             {
                 "type": "text",
-                "question": "경쟁사 제안을 거절하는 짧은 답변 문장을 작성해보세요. (거절 + 대화 중단 + 필요시 내부 공유 의식 포함)",
+                "question": "경쟁사 제안을 거절하는 짧은 답변 문장을 작성해보세요. (거절 + 대화 중단 + 준법 의식 포함)",
                 "score": 40,
                 "rubric_keywords": {
                     "거절": ["거절", "불가", "할 수 없습니다", "어렵습니다"],
@@ -383,7 +371,6 @@ DEPT_GUIDE = {
 THEME_TOTAL_SCORE = 100
 TOTAL_SCORE = len(SCENARIO_ORDER) * THEME_TOTAL_SCORE
 
-
 # =========================================================
 # 4) 상태 관리
 # =========================================================
@@ -392,26 +379,16 @@ def init_state():
         "stage": "intro",  # intro -> map -> briefing -> quiz -> ending
         "user_info": {},
         "current_mission": None,
-
-        "completed": [],              # 완료된 테마 key 리스트
-        "mission_scores": {},         # {"subcontracting": 85, ...}
-        "score": 0,                   # 전체 합계
-
-        # 테마별 퀴즈 진행 상태
-        # quiz_progress[m_key] = {
-        #   "current_idx": 0,
-        #   "submissions": {q_idx: result_dict}
-        # }
+        "completed": [],
+        "mission_scores": {},
+        "score": 0,
         "quiz_progress": {},
-
-        "attempt_counts": {},         # 미션별 제출 횟수(문항 단위)
-        "attempt_history": [],        # 세션 내 로그
-
-        # 정복 연출용
+        "attempt_counts": {},
+        "attempt_history": [],
         "show_conquer_fx": False,
         "last_cleared_mission": None,
-
-        "log_write_error": None
+        "log_write_error": None,
+        "played_final_fanfare": False,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -443,10 +420,7 @@ def get_theme_status(m_key: str):
 def theme_score_from_submissions(m_key: str):
     ensure_quiz_progress(m_key)
     subs = st.session_state.quiz_progress[m_key]["submissions"]
-    total = 0
-    for _, result in subs.items():
-        total += int(result.get("awarded_score", 0))
-    return total
+    return int(sum(int(result.get("awarded_score", 0)) for result in subs.values()))
 
 
 def mark_theme_complete_if_ready(m_key: str):
@@ -454,35 +428,65 @@ def mark_theme_complete_if_ready(m_key: str):
     subs = st.session_state.quiz_progress[m_key]["submissions"]
     total_q = len(SCENARIOS[m_key]["quiz"])
     if len(subs) == total_q:
-        # 점수 확정
         st.session_state.mission_scores[m_key] = theme_score_from_submissions(m_key)
         recalc_total_score()
-
-        # 완료 처리 (중복 방지)
         if m_key not in st.session_state.completed:
             st.session_state.completed.append(m_key)
             st.session_state.last_cleared_mission = m_key
             st.session_state.show_conquer_fx = True
 
-
 # =========================================================
-# 5) 유틸 함수 (이미지 / 로그 / 평가)
+# 5) 유틸 함수 (이미지 / 사운드 / 로그 / 평가)
 # =========================================================
-def safe_show_image(path: Path, **kwargs):
-    if path.exists():
-        st.image(str(path), **kwargs)
-    else:
-        st.warning(f"이미지 파일을 찾을 수 없습니다: {path.name}")
-
-
 def get_current_map_image():
-    cleared = len(st.session_state.completed)
-    staged_img = MAP_STAGE_IMAGES.get(cleared)
-    if staged_img and staged_img.exists():
-        return staged_img
+    stage_idx = min(len(st.session_state.get("completed", [])), 3)
+    path = MAP_STAGE_IMAGES.get(stage_idx)
+    if path and path.exists():
+        return path
     if DEFAULT_MAP_IMAGE.exists():
         return DEFAULT_MAP_IMAGE
     return None
+
+
+def show_map_with_fade(map_path: Path, caption: str = None):
+    if not map_path or not map_path.exists():
+        st.warning("맵 이미지 파일을 찾을 수 없습니다.")
+        return
+    try:
+        img_bytes = map_path.read_bytes()
+        encoded = base64.b64encode(img_bytes).decode("utf-8")
+        st.markdown(
+            f"""
+            <div class="map-fade-wrap">
+                <img class="map-fade-img" src="data:image/png;base64,{encoded}" />
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+        if caption:
+            st.caption(caption)
+    except Exception:
+        st.image(str(map_path), use_container_width=True)
+        if caption:
+            st.caption(caption)
+
+
+def play_sfx(sound_path: Path):
+    if not sound_path or not sound_path.exists():
+        return
+    try:
+        ext = sound_path.suffix.lower().replace(".", "") or "mp3"
+        audio_b64 = base64.b64encode(sound_path.read_bytes()).decode("utf-8")
+        st.markdown(
+            f"""
+            <audio autoplay style="display:none;">
+              <source src="data:audio/{ext};base64,{audio_b64}" type="audio/{ext}">
+            </audio>
+            """,
+            unsafe_allow_html=True,
+        )
+    except Exception:
+        pass
 
 
 def append_attempt_log(mission_key: str, q_idx: int, q_type: str, payload: dict):
@@ -497,6 +501,7 @@ def append_attempt_log(mission_key: str, q_idx: int, q_type: str, payload: dict)
         "mission_key": mission_key,
         "mission_title": mission["title"],
         "question_index": q_idx + 1,
+        "question_code": f"{mission_key}_Q{q_idx+1}",
         "question_type": q_type,
         "question": question["question"],
         "selected_or_text": payload.get("selected_or_text", ""),
@@ -526,13 +531,13 @@ def evaluate_text_answer(answer_text: str, rubric_keywords: dict, max_score: int
             "awarded_score": 0,
             "found_groups": [],
             "missing_groups": list(rubric_keywords.keys()),
-            "quality": "empty"
+            "quality": "empty",
         }
 
-    found = []
-    missing = []
+    found, missing = [], []
+    lowered = text.lower()
     for group_name, keywords in rubric_keywords.items():
-        hit = any(str(k).lower() in text.lower() for k in keywords)
+        hit = any(str(k).lower() in lowered for k in keywords)
         if hit:
             found.append(group_name)
         else:
@@ -540,8 +545,6 @@ def evaluate_text_answer(answer_text: str, rubric_keywords: dict, max_score: int
 
     ratio = len(found) / max(len(rubric_keywords), 1)
     awarded = int(round(max_score * ratio))
-
-    # 너무 짧은 답변 패널티(예: "안돼요")
     if len(text) < 8 and awarded > 0:
         awarded = max(0, awarded - 5)
 
@@ -550,7 +553,7 @@ def evaluate_text_answer(answer_text: str, rubric_keywords: dict, max_score: int
         "awarded_score": awarded,
         "found_groups": found,
         "missing_groups": missing,
-        "quality": quality
+        "quality": quality,
     }
 
 
@@ -558,9 +561,9 @@ def get_grade(score: int, total: int):
     ratio = score / total if total else 0
     if ratio >= 0.9:
         return "마스터 가디언 🏆"
-    elif ratio >= 0.7:
+    if ratio >= 0.7:
         return "실전 가디언 ✅"
-    elif ratio >= 0.5:
+    if ratio >= 0.5:
         return "수습 가디언 📘"
     return "재학습 권장 🔁"
 
@@ -570,11 +573,108 @@ def reset_game():
     st.rerun()
 
 
+def render_admin_question_stats():
+    st.markdown("### 🛠 관리자용 문항별 정답률 통계")
+
+    if not LOG_FILE.exists():
+        st.info("아직 누적 로그 파일이 없습니다. 교육을 1회 이상 진행하면 통계가 생성됩니다.")
+        return
+
+    try:
+        df = pd.read_csv(LOG_FILE, encoding="utf-8-sig")
+    except Exception as e:
+        st.error(f"로그 파일을 읽지 못했습니다: {e}")
+        return
+
+    if df.empty:
+        st.info("로그 데이터가 비어 있습니다.")
+        return
+
+    for col in ["awarded_score", "max_score", "question_index"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+
+    if "timestamp" in df.columns:
+        df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+
+    if "question_code" not in df.columns:
+        df["question_code"] = df["mission_key"].astype(str) + "_Q" + df["question_index"].astype(int).astype(str)
+
+    def _is_correct_norm(row):
+        qtype = str(row.get("question_type", "")).lower()
+        is_correct = str(row.get("is_correct", "")).upper()
+        if qtype == "mcq":
+            return is_correct == "Y"
+        max_score = float(row.get("max_score", 0) or 0)
+        awarded = float(row.get("awarded_score", 0) or 0)
+        ratio = (awarded / max_score) if max_score > 0 else 0
+        return ratio >= TEXT_CORRECT_THRESHOLD
+
+    df["is_correct_norm"] = df.apply(_is_correct_norm, axis=1)
+
+    name_series = df["name"].astype(str) if "name" in df.columns else pd.Series([""] * len(df))
+    dept_series = df["department"].astype(str) if "department" in df.columns else pd.Series([""] * len(df))
+    df["learner_key"] = name_series + "|" + dept_series
+    df["question_label"] = df["mission_title"].astype(str) + " · Q" + df["question_index"].astype(int).astype(str)
+
+    attempt_stats = (
+        df.groupby(["question_code", "question_label"], as_index=False)
+          .agg(
+              attempts=("is_correct_norm", "count"),
+              corrects=("is_correct_norm", "sum"),
+              avg_score=("awarded_score", "mean"),
+              max_score=("max_score", "max"),
+          )
+    )
+    attempt_stats["attempt_correct_rate"] = (attempt_stats["corrects"] / attempt_stats["attempts"] * 100).round(1)
+
+    df_sorted = df.sort_values("timestamp", ascending=True) if "timestamp" in df.columns else df.copy()
+    first_attempt_df = df_sorted.drop_duplicates(subset=["learner_key", "question_code"], keep="first")
+
+    first_stats = (
+        first_attempt_df.groupby(["question_code"], as_index=False)
+        .agg(
+            first_attempts=("is_correct_norm", "count"),
+            first_corrects=("is_correct_norm", "sum"),
+        )
+    )
+    first_stats["first_correct_rate"] = (first_stats["first_corrects"] / first_stats["first_attempts"] * 100).round(1)
+
+    stats = attempt_stats.merge(first_stats, on="question_code", how="left")
+    stats["avg_score_rate"] = ((stats["avg_score"] / stats["max_score"].replace(0, 1)) * 100).round(1)
+    stats = stats.sort_values(["question_code"]).reset_index(drop=True)
+
+    view_cols = [
+        "question_label",
+        "attempts",
+        "attempt_correct_rate",
+        "first_attempts",
+        "first_correct_rate",
+        "avg_score_rate",
+    ]
+    rename_map = {
+        "question_label": "문항",
+        "attempts": "전체 제출 수",
+        "attempt_correct_rate": "전체 정답률(%)",
+        "first_attempts": "첫 시도 수",
+        "first_correct_rate": "첫 시도 정답률(%)",
+        "avg_score_rate": "평균 점수율(%)",
+    }
+    view_df = stats[view_cols].rename(columns=rename_map)
+
+    st.dataframe(view_df, use_container_width=True)
+    chart_df = view_df[["문항", "첫 시도 정답률(%)"]].copy().set_index("문항")
+    st.bar_chart(chart_df)
+
+    st.caption(
+        f"※ 주관식은 점수율 {int(TEXT_CORRECT_THRESHOLD*100)}% 이상을 '정답'으로 집계합니다. "
+        "임계값은 TEXT_CORRECT_THRESHOLD로 조정할 수 있습니다."
+    )
+
 # =========================================================
-# 6) UI 조각들 (맵, 연출, 브리핑, 퀴즈)
+# 6) UI 조각들 (맵, 브리핑, 퀴즈)
 # =========================================================
 def render_conquer_fx_if_needed():
-    """맵 화면 진입 시 1회성 정복 연출"""
     if not st.session_state.get("show_conquer_fx"):
         return
 
@@ -584,26 +684,48 @@ def render_conquer_fx_if_needed():
         return
 
     title = SCENARIOS[m_key]["title"]
-    box = st.empty()
-    prog = st.progress(0)
+    theme_icon = THEME_ICONS.get(m_key, "🏳️")
+    cleared_cnt = len(st.session_state.get("completed", []))
 
-    steps = [
-        f"🗺️ Guardian’s Map 업데이트 중...",
+    fx_box = st.empty()
+    fx_progress = st.progress(0)
+    fx_steps = [
+        "🗺️ Guardian’s Map 갱신 중...",
         f"⚔️ {title} 정복 기록 반영...",
-        f"✨ 정복 완료! 다음 관문이 열립니다."
+        f"✨ {title} 정복 완료! 새로운 단계가 열립니다.",
     ]
-    for i, msg in enumerate(steps, start=1):
-        box.markdown(f"<div class='fx-box'>{msg}</div>", unsafe_allow_html=True)
-        prog.progress(int(i / len(steps) * 100))
-        time.sleep(0.35)
 
+    for i, msg in enumerate(fx_steps, start=1):
+        fx_box.markdown(
+            f"""
+            <div style="
+                background: linear-gradient(135deg, #102313, #152B1A);
+                border: 1px solid #2F7D32;
+                border-radius: 14px;
+                padding: 12px 14px;
+                margin-bottom: 10px;
+                color: #E8F5E9;
+                font-weight: 700;
+            ">{msg}</div>
+            """,
+            unsafe_allow_html=True,
+        )
+        fx_progress.progress(int(i / len(fx_steps) * 100))
+        time.sleep(0.28)
+
+    play_sfx(SFX["conquer"])
+
+    new_map = get_current_map_image()
+    if new_map:
+        show_map_with_fade(new_map, caption=f"✨ Guardian’s Map Updated · stage {min(cleared_cnt, 3)}")
+    else:
+        st.warning("갱신된 맵 이미지를 찾을 수 없습니다. (world_map_0~3.png 확인)")
+
+    st.success(f"{theme_icon} {title} 정복 완료!")
     try:
-        st.toast(f"{title} 정복 완료! 🏳️", icon="✨")
+        st.toast(f"{theme_icon} 새 구역이 해방되었습니다!", icon="✨")
     except Exception:
         pass
-
-    # 미션마다 풍선은 과하니 눈꽃 대신 성공박스만
-    st.success(f"🏁 {title} 정복! Guardian’s Map이 갱신되었습니다.")
 
     st.session_state.show_conquer_fx = False
 
@@ -612,47 +734,36 @@ def render_guardian_map():
     st.subheader("🗺️ Guardian’s Map")
 
     map_img = get_current_map_image()
-    if map_img:
-        st.image(str(map_img), use_container_width=True)
-    else:
-        st.warning("맵 이미지가 없습니다. (world_map.png 또는 world_map_0~3.png)")
+    cleared_cnt = len(st.session_state.get("completed", []))
+    stage_idx = min(cleared_cnt, 3)
 
-    # 상태 패널 (정복감 강화용)
-    nodes_html = ["<div class='map-grid'>"]
+    if map_img:
+        show_map_with_fade(map_img, caption=f"현재 맵 단계: world_map_{stage_idx}.png")
+    else:
+        st.warning("맵 이미지가 없습니다. world_map_0~3.png 경로를 확인해주세요.")
+        return
+
+    total_themes = len(SCENARIO_ORDER)
+    st.progress(cleared_cnt / total_themes if total_themes else 0)
+    st.caption(f"정복 진행률: {cleared_cnt} / {total_themes}")
+
+    status_labels = []
     for m_key in SCENARIO_ORDER:
         title = SCENARIOS[m_key]["title"]
-        status = get_theme_status(m_key)
-
-        if status == "clear":
-            cls = "map-node node-clear"
-            badge = "✅ 정복 완료"
-        elif status == "open":
-            cls = "map-node node-open"
-            badge = "🟡 진입 가능"
+        score = st.session_state.get("mission_scores", {}).get(m_key)
+        if m_key in st.session_state.get("completed", []):
+            txt = f"✅ {title}"
+            if score is not None:
+                txt += f" ({score}/100)"
         else:
-            cls = "map-node node-locked"
-            badge = "🔒 잠금"
+            idx = SCENARIO_ORDER.index(m_key)
+            if idx == 0 or SCENARIO_ORDER[idx - 1] in st.session_state.get("completed", []):
+                txt = f"🟡 {title}"
+            else:
+                txt = f"🔒 {title}"
+        status_labels.append(txt)
 
-        score = st.session_state.mission_scores.get(m_key)
-        score_line = f"<div style='font-size:0.82rem; opacity:.85;'>점수: {score}/100</div>" if score is not None else "<div style='font-size:0.82rem; opacity:.65;'>점수: -</div>"
-
-        nodes_html.append(
-            f"""
-            <div class="{cls}">
-              <div style="font-weight:700; font-size:0.92rem;">{title}</div>
-              <div style="margin-top:6px;">{badge}</div>
-              {score_line}
-            </div>
-            """
-        )
-    nodes_html.append("</div>")
-
-    st.markdown("".join(nodes_html), unsafe_allow_html=True)
-
-    # 진행률
-    cleared_cnt = len(st.session_state.completed)
-    st.progress(cleared_cnt / len(SCENARIO_ORDER))
-    st.caption(f"정복 진행률: {cleared_cnt} / {len(SCENARIO_ORDER)} 테마")
+    st.caption(" · ".join(status_labels))
 
 
 def render_briefing(m_key: str):
@@ -662,10 +773,9 @@ def render_briefing(m_key: str):
 
     st.markdown(
         f"<div class='mission-header'><div style='font-size:1.1rem; font-weight:800;'>{mission['title']} · 브리핑</div></div>",
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
 
-    # 상단 요약 카드
     st.markdown(
         f"""
         <div class='card'>
@@ -673,14 +783,12 @@ def render_briefing(m_key: str):
           <div>{brief['summary']}</div>
         </div>
         """,
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
 
-    # 키워드 칩
     chips = "".join([f"<span class='brief-chip'>{k}</span>" for k in brief["keywords"]])
     st.markdown(f"<div style='margin-bottom:10px;'>{chips}</div>", unsafe_allow_html=True)
 
-    # 인포그래픽 느낌 카드 2개
     col1, col2 = st.columns(2)
     with col1:
         red_html = "".join([f"<li>{x}</li>" for x in brief["red_flags"]])
@@ -691,7 +799,7 @@ def render_briefing(m_key: str):
               <ul>{red_html}</ul>
             </div>
             """,
-            unsafe_allow_html=True
+            unsafe_allow_html=True,
         )
     with col2:
         chk_html = "".join([f"<li>{x}</li>" for x in brief["checklist"]])
@@ -702,15 +810,13 @@ def render_briefing(m_key: str):
               <ul>{chk_html}</ul>
             </div>
             """,
-            unsafe_allow_html=True
+            unsafe_allow_html=True,
         )
 
-    # 부서별 포인트
     if user_dept:
         st.info(f"부서 포인트 ({user_dept}) · {DEPT_GUIDE.get(user_dept, '기본 준법 원칙을 확인하세요.')}")
 
-    # 브리핑 종료 버튼
-    c1, c2 = st.columns([1, 1])
+    c1, c2 = st.columns(2)
     with c1:
         if st.button("📝 퀴즈 시작", use_container_width=True):
             st.session_state.stage = "quiz"
@@ -727,10 +833,8 @@ def render_mcq_question(m_key: str, q_idx: int, q_data: dict):
     progress = st.session_state.quiz_progress[m_key]
     submissions = progress["submissions"]
 
-    # 이미 제출된 문항이면 저장된 피드백 표시
     if q_idx in submissions:
         res = submissions[q_idx]
-
         if res["is_correct"] == "Y":
             st.success(f"✅ 정답 ({res['awarded_score']}/{q_data['score']}점)")
         else:
@@ -744,41 +848,35 @@ def render_mcq_question(m_key: str, q_idx: int, q_data: dict):
               <hr style="border-color:#2A3140;">
               <div><b>선택지 설명</b><br>{res['choice_feedback']}</div>
               <div style="margin-top:8px;"><b>핵심 해설</b><br>{res['explain']}</div>
-              {"<div style='margin-top:8px; color:#FFCC80;'><b>오답 보완 포인트</b><br>" + res['wrong_extra'] + "</div>" if res['is_correct']=="N" else ""}
+              {"<div style='margin-top:8px; color:#FFCC80;'><b>오답 보완 포인트</b><br>" + res['wrong_extra'] + "</div>" if res['is_correct']=='N' else ''}
             </div>
             """,
-            unsafe_allow_html=True
+            unsafe_allow_html=True,
         )
 
-        # 다음/완료 버튼
         total_q = len(SCENARIOS[m_key]["quiz"])
         if q_idx < total_q - 1:
             if st.button("다음 문제로 ▶", key=f"next_{m_key}_{q_idx}", use_container_width=True):
                 progress["current_idx"] += 1
                 st.rerun()
         else:
-            # 마지막 문항까지 제출 완료 상태
             mark_theme_complete_if_ready(m_key)
             if st.button("🏁 테마 정복 완료! 맵으로 돌아가기", key=f"finish_{m_key}", use_container_width=True):
                 st.session_state.stage = "map"
                 st.rerun()
-
         return
 
-    # 아직 제출 전
     st.markdown(f"### Q{q_idx+1}. {q_data['question']}")
     selected = st.radio(
         "답을 선택하세요",
         options=list(range(len(q_data["options"]))),
         format_func=lambda i: q_data["options"][i],
-        key=f"radio_{m_key}_{q_idx}"
+        key=f"radio_{m_key}_{q_idx}",
     )
 
     if st.button("제출하기", key=f"submit_mcq_{m_key}_{q_idx}", use_container_width=True):
-        is_correct = (selected == q_data["answer"])
+        is_correct = selected == q_data["answer"]
         awarded = q_data["score"] if is_correct else 0
-
-        # 미션별 제출 횟수 카운트
         st.session_state.attempt_counts[m_key] = st.session_state.attempt_counts.get(m_key, 0) + 1
 
         result = {
@@ -789,9 +887,15 @@ def render_mcq_question(m_key: str, q_idx: int, q_data: dict):
             "selected_text": q_data["options"][selected],
             "choice_feedback": q_data["choice_feedback"][selected],
             "explain": q_data["explain"],
-            "wrong_extra": q_data["wrong_extra"]
+            "wrong_extra": q_data["wrong_extra"],
         }
         submissions[q_idx] = result
+
+        play_sfx(SFX["correct"] if is_correct else SFX["wrong"])
+        try:
+            st.toast("정답입니다!" if is_correct else "다시 생각해보세요", icon="✨" if is_correct else "⚠️")
+        except Exception:
+            pass
 
         append_attempt_log(
             mission_key=m_key,
@@ -800,10 +904,9 @@ def render_mcq_question(m_key: str, q_idx: int, q_data: dict):
             payload={
                 "selected_or_text": q_data["options"][selected],
                 "is_correct": "Y" if is_correct else "N",
-                "awarded_score": awarded
-            }
+                "awarded_score": awarded,
+            },
         )
-
         st.rerun()
 
 
@@ -814,9 +917,14 @@ def render_text_question(m_key: str, q_idx: int, q_data: dict):
 
     if q_idx in submissions:
         res = submissions[q_idx]
-
         st.success(f"📝 주관식 평가 완료 ({res['awarded_score']}/{q_data['score']}점)")
-        quality_badge = "좋아요 ✅" if res["quality"] == "good" else ("부분 충족 ☑️" if res["quality"] == "partial" else "답변 필요 ✍️")
+
+        if res["quality"] == "good":
+            quality_badge = "좋아요 ✅"
+        elif res["quality"] == "partial":
+            quality_badge = "부분 충족 ☑️"
+        else:
+            quality_badge = "답변 필요 ✍️"
 
         found_text = ", ".join(res["found_groups"]) if res["found_groups"] else "없음"
         missing_text = ", ".join(res["missing_groups"]) if res["missing_groups"] else "없음"
@@ -832,15 +940,13 @@ def render_text_question(m_key: str, q_idx: int, q_data: dict):
               <div style="margin-top:4px;"><b>보완 포인트</b>: {missing_text}</div>
             </div>
             """,
-            unsafe_allow_html=True
+            unsafe_allow_html=True,
         )
 
         with st.expander("모범답안 보기"):
             st.write(q_data["model_answer"])
 
-        # 마지막 문항이면 테마 완료 처리
         mark_theme_complete_if_ready(m_key)
-
         if st.button("🏁 테마 정복 완료! 맵으로 돌아가기", key=f"end_theme_{m_key}", use_container_width=True):
             st.session_state.stage = "map"
             st.rerun()
@@ -851,12 +957,11 @@ def render_text_question(m_key: str, q_idx: int, q_data: dict):
         "답안을 입력하세요",
         key=f"text_{m_key}_{q_idx}",
         height=120,
-        placeholder="예: 서면 계약 발급 없이 진행하면 리스크가 있어, 관련 절차 확인 후 진행하겠습니다."
+        placeholder="예: 서면 계약 발급 없이 진행하면 리스크가 있어, 관련 절차 확인 후 진행하겠습니다.",
     )
 
     if st.button("제출하기", key=f"submit_text_{m_key}_{q_idx}", use_container_width=True):
         eval_res = evaluate_text_answer(answer_text, q_data["rubric_keywords"], q_data["score"])
-
         st.session_state.attempt_counts[m_key] = st.session_state.attempt_counts.get(m_key, 0) + 1
 
         result = {
@@ -866,9 +971,17 @@ def render_text_question(m_key: str, q_idx: int, q_data: dict):
             "answer_text": answer_text.strip(),
             "found_groups": eval_res["found_groups"],
             "missing_groups": eval_res["missing_groups"],
-            "quality": eval_res["quality"]
+            "quality": eval_res["quality"],
         }
         submissions[q_idx] = result
+
+        ratio = (eval_res["awarded_score"] / q_data["score"]) if q_data["score"] else 0
+        is_good = ratio >= TEXT_CORRECT_THRESHOLD
+        play_sfx(SFX["correct"] if is_good else SFX["wrong"])
+        try:
+            st.toast("주관식 답안이 잘 작성되었어요!" if is_good else "보완 포인트를 확인해보세요", icon="✨" if is_good else "⚠️")
+        except Exception:
+            pass
 
         append_attempt_log(
             mission_key=m_key,
@@ -877,10 +990,9 @@ def render_text_question(m_key: str, q_idx: int, q_data: dict):
             payload={
                 "selected_or_text": answer_text.strip(),
                 "is_correct": result["is_correct"],
-                "awarded_score": eval_res["awarded_score"]
-            }
+                "awarded_score": eval_res["awarded_score"],
+            },
         )
-
         st.rerun()
 
 
@@ -890,36 +1002,32 @@ def render_quiz(m_key: str):
 
     progress = st.session_state.quiz_progress[m_key]
     q_list = mission["quiz"]
-
-    # 안전장치
     if progress["current_idx"] >= len(q_list):
         progress["current_idx"] = len(q_list) - 1
 
     current_idx = progress["current_idx"]
     q_data = q_list[current_idx]
-
-    # 상단 상태
     current_theme_score = theme_score_from_submissions(m_key)
     submitted_count = len(progress["submissions"])
+    theme_icon = THEME_ICONS.get(m_key, "🧭")
 
     st.markdown(
         f"""
         <div class='mission-header'>
-          <div style='font-size:1.05rem; font-weight:800;'>{mission['title']} · 퀴즈</div>
+          <div style='font-size:1.05rem; font-weight:800;'>{theme_icon} {mission['title']} · 퀴즈</div>
           <div style='margin-top:4px; font-size:0.9rem; opacity:.92;'>문항 진행: {submitted_count} / {len(q_list)} · 테마 점수(누적): {current_theme_score}/100</div>
         </div>
         """,
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
 
-    # 좌측 캐릭터 / 우측 문제
     col_left, col_right = st.columns([1, 2])
-
     with col_left:
         if MASTER_IMAGE.exists():
             st.image(str(MASTER_IMAGE), caption="클린 마스터", use_container_width=True)
         else:
             st.info("클린 마스터 이미지 없음")
+
         st.markdown(
             """
             <div class='card'>
@@ -927,14 +1035,14 @@ def render_quiz(m_key: str):
               <div>정답 여부보다 <b>왜 그런지</b>를 이해하는 게 핵심이에요.</div>
             </div>
             """,
-            unsafe_allow_html=True
+            unsafe_allow_html=True,
         )
+
         if st.button("🗺️ 맵으로 나가기", key=f"back_map_{m_key}", use_container_width=True):
             st.session_state.stage = "map"
             st.rerun()
 
     with col_right:
-        # 문항 타입별 렌더링
         if q_data["type"] == "mcq":
             render_mcq_question(m_key, current_idx, q_data)
         elif q_data["type"] == "text":
@@ -942,20 +1050,18 @@ def render_quiz(m_key: str):
         else:
             st.error("지원하지 않는 문항 타입입니다.")
 
-
 # =========================================================
 # 7) 메인 화면 분기
 # =========================================================
 init_state()
 
-# 7-1. 인트로
 if st.session_state.stage == "intro":
     st.title("🛡️ 2026 Compliance Adventure")
     st.caption("Guardian Training · 컴플라이언스 테마 정복형 학습")
 
     intro_map = get_current_map_image()
     if intro_map:
-        st.image(str(intro_map), use_container_width=True)
+        show_map_with_fade(intro_map)
     else:
         st.info("맵 이미지를 추가하면 인트로 연출이 더 좋아집니다.")
 
@@ -966,7 +1072,7 @@ if st.session_state.stage == "intro":
           <div>맵에서 테마를 선택 → 핵심 브리핑 학습 → 퀴즈(4지선다 + 주관식) → 정복 완료!</div>
         </div>
         """,
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
 
     name = st.text_input("성함")
@@ -980,8 +1086,6 @@ if st.session_state.stage == "intro":
         else:
             st.warning("성함을 입력해주세요. (공백만 입력 불가)")
 
-
-# 7-2. Guardian's Map
 elif st.session_state.stage == "map":
     user_name = st.session_state.user_info.get("name", "가디언")
     user_dept = st.session_state.user_info.get("dept", "")
@@ -995,20 +1099,19 @@ elif st.session_state.stage == "map":
 
     st.write("관문을 선택하세요:")
     cols = st.columns(3)
-
     for i, m_key in enumerate(SCENARIO_ORDER):
         mission = SCENARIOS[m_key]
         status = get_theme_status(m_key)
-
         with cols[i]:
             if status == "clear":
-                st.success(f"✅ {mission['title']}")
-                st.caption(f"점수 {st.session_state.mission_scores.get(m_key, 0)}/100")
+                score = st.session_state.mission_scores.get(m_key, 0)
+                badge = "🏅" if score >= 90 else ("✅" if score >= 70 else "📘")
+                st.success(f"{badge} {mission['title']}")
+                st.caption(f"점수 {score}/100")
             elif status == "open":
                 if st.button(f"{mission['title']} 진입", key=f"enter_{m_key}", use_container_width=True):
                     st.session_state.current_mission = m_key
                     ensure_quiz_progress(m_key)
-                    # 이미 완료된 테마는 굳이 안 들어가게 막지만, open일 때는 briefing부터
                     st.session_state.stage = "briefing"
                     st.rerun()
             else:
@@ -1022,7 +1125,7 @@ elif st.session_state.stage == "map":
           <div><b>{st.session_state.score} / {TOTAL_SCORE}</b> · 등급 예상: {get_grade(st.session_state.score, TOTAL_SCORE)}</div>
         </div>
         """,
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
 
     if len(st.session_state.completed) == len(SCENARIO_ORDER):
@@ -1030,8 +1133,6 @@ elif st.session_state.stage == "map":
             st.session_state.stage = "ending"
             st.rerun()
 
-
-# 7-3. 브리핑
 elif st.session_state.stage == "briefing":
     m_key = st.session_state.get("current_mission")
     if not m_key or m_key not in SCENARIOS:
@@ -1039,7 +1140,6 @@ elif st.session_state.stage == "briefing":
         st.session_state.stage = "map"
         st.rerun()
 
-    # 이미 클리어된 테마 재진입 방지 (원하면 복습 모드로 바꿀 수 있음)
     if m_key in st.session_state.completed:
         st.info("이미 정복한 테마입니다. 지도로 돌아갑니다.")
         st.session_state.stage = "map"
@@ -1047,8 +1147,6 @@ elif st.session_state.stage == "briefing":
 
     render_briefing(m_key)
 
-
-# 7-4. 퀴즈
 elif st.session_state.stage == "quiz":
     m_key = st.session_state.get("current_mission")
     if not m_key or m_key not in SCENARIOS:
@@ -1056,15 +1154,12 @@ elif st.session_state.stage == "quiz":
         st.session_state.stage = "map"
         st.rerun()
 
-    # 혹시 current_idx가 마지막 넘어갔으면 완료 체크 후 맵
     ensure_quiz_progress(m_key)
     if len(st.session_state.quiz_progress[m_key]["submissions"]) == len(SCENARIOS[m_key]["quiz"]):
         mark_theme_complete_if_ready(m_key)
 
     render_quiz(m_key)
 
-
-# 7-5. 엔딩
 elif st.session_state.stage == "ending":
     user_name = st.session_state.user_info.get("name", "가디언")
     user_dept = st.session_state.user_info.get("dept", "")
@@ -1072,9 +1167,13 @@ elif st.session_state.stage == "ending":
     grade = get_grade(score, TOTAL_SCORE)
 
     total_attempts = len(st.session_state.attempt_history)
-    wrong_like = sum(1 for r in st.session_state.attempt_history if r["is_correct"] in ["N", "PARTIAL"])
+    wrong_like = sum(1 for r in st.session_state.attempt_history if str(r.get("is_correct", "")) in ["N", "PARTIAL"])
 
     st.balloons()
+    if not st.session_state.get("played_final_fanfare", False):
+        play_sfx(SFX["final"])
+        st.session_state.played_final_fanfare = True
+
     st.title("🏆 Guardian Training Complete")
     st.success(f"{user_name} 가디언님, 모든 테마를 정복했습니다!")
 
@@ -1089,7 +1188,7 @@ elif st.session_state.stage == "ending":
               <div>등급: <b>{grade}</b></div>
             </div>
             """,
-            unsafe_allow_html=True
+            unsafe_allow_html=True,
         )
     with c2:
         theme_lines = []
@@ -1104,7 +1203,7 @@ elif st.session_state.stage == "ending":
               <ul>{''.join(theme_lines)}</ul>
             </div>
             """,
-            unsafe_allow_html=True
+            unsafe_allow_html=True,
         )
 
     st.markdown(
@@ -1114,27 +1213,28 @@ elif st.session_state.stage == "ending":
           <div>총 제출 횟수: <b>{total_attempts}회</b> · 오답/부분정답 포함: <b>{wrong_like}회</b></div>
         </div>
         """,
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
 
     if st.session_state.log_write_error:
         st.warning(f"참고: 파일 로그 저장 실패 ({st.session_state.log_write_error}) — 앱 동작에는 문제 없습니다.")
 
-    # 세션 로그 다운로드
     if st.session_state.attempt_history:
         output = io.StringIO()
         fieldnames = list(st.session_state.attempt_history[0].keys())
         writer = csv.DictWriter(output, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(st.session_state.attempt_history)
-
         st.download_button(
             label="📥 이번 교육 응답 로그 다운로드 (CSV)",
             data=output.getvalue().encode("utf-8-sig"),
             file_name=f"compliance_training_log_{user_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
             mime="text/csv",
-            use_container_width=True
+            use_container_width=True,
         )
+
+    with st.expander("🛠 관리자용 문항 통계 보기", expanded=False):
+        render_admin_question_stats()
 
     c1, c2 = st.columns(2)
     with c1:
@@ -1144,6 +1244,5 @@ elif st.session_state.stage == "ending":
     with c2:
         if st.button("🔄 처음부터 다시", use_container_width=True):
             reset_game()
-
 else:
     st.error("알 수 없는 stage입니다. 앱을 다시 시작해주세요.")
