@@ -2,41 +2,114 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 
-# --- 1. 페이지 설정 및 디자인 ---
-st.set_page_config(page_title="2026 컴플라이언스 어드벤처", layout="wide")
+# --- 1. 페이지 설정 및 애니메이션 CSS ---
+st.set_page_config(page_title="2026 Compliance Adventure", layout="centered")
 
-# CSS: 게임 인터페이스 느낌을 주기 위한 스타일
 st.markdown("""
     <style>
-    .stApp { background-color: #0E1117; color: #E0E0E0; }
-    /* 버튼 스타일 강화 */
-    div.stButton > button:first-child {
-        background-color: #00C853 !important; color: white !important;
-        border-radius: 10px !important; font-size: 18px !important; font-weight: bold !important;
-        height: 50px !important; width: 100% !important; border: none !important;
+    /* 배경 및 기본 스타일 */
+    .stApp { background-color: #0E1117; }
+    
+    /* 시작 버튼 깜박임 애니메이션 */
+    @keyframes blinking {
+        0% { opacity: 1.0; transform: scale(1); }
+        50% { opacity: 0.5; transform: scale(1.1); }
+        100% { opacity: 1.0; transform: scale(1); }
     }
-    .status-box {
-        background-color: #1A1C24; padding: 20px; border-radius: 15px;
-        border-left: 5px solid #00C853; margin-bottom: 20px;
+    
+    .start-btn {
+        animation: blinking 1.5s infinite;
+        background-color: #00C853;
+        color: white;
+        padding: 10px 20px;
+        border-radius: 50px;
+        font-weight: bold;
+        text-align: center;
+        cursor: pointer;
+        display: inline-block;
+        border: 2px solid #FFFFFF;
+        box-shadow: 0 0 15px #00C853;
     }
-    .mission-card {
-        background-color: #262730; padding: 15px; border-radius: 10px; border: 1px solid #464B5F;
+    
+    /* 맵 레이아웃 설정 */
+    .map-container {
+        position: relative;
+        text-align: center;
+        color: white;
     }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. 시스템 상태 초기화 ---
-if 'stage' not in st.session_state:
-    st.session_state.stage = 'intro'
-    st.session_state.score = 0
-    st.session_state.completed = []
-    st.session_state.user_info = {}
+# --- 2. 게임 상태 관리 ---
+if 'game_state' not in st.session_state:
+    st.session_state.game_state = 'intro' # intro -> map -> mission1 -> map -> mission2 ...
+    st.session_state.cleared = []
 
-# --- 3. 이미지 에셋 (내 깃허브에 올린 파일 경로로 수정) ---
-IMAGES = {
-    "world_map": "world_map.png",
-    "clean_master": "master.png",
-}
+# --- 3. 게임 로직 ---
+
+# [1단계: 시작 화면]
+if st.session_state.game_state == 'intro':
+    st.title("🛡️ 2026 컴플라이언스 어드벤처")
+    st.write("새로운 준법 교육의 시대로 초대합니다.")
+    
+    # 중앙 정렬을 위한 컬럼
+    _, col_mid, _ = st.columns([1, 2, 1])
+    with col_mid:
+        st.image("world_map.png", use_container_width=True) # 맵 이미지
+        st.markdown("<div style='text-align: center;'><div class='start-btn'>ADVENTURE START</div></div>", unsafe_allow_html=True)
+        if st.button("모험을 시작하시겠습니까?", key="start_btn"):
+            st.session_state.game_state = 'map'
+            st.rerun()
+
+# [2단계: 메인 게임 맵]
+elif st.session_state.game_state == 'map':
+    st.header("📍 작전 지도를 확인하세요")
+    
+    # 맵 이미지 위에 상태 표시
+    st.image("world_map.png", width=700)
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.subheader("1차 관문")
+        if "mission1" in st.session_state.cleared:
+            st.success("✅ 하도급 계곡 클리어!")
+        else:
+            if st.button("하도급의 계곡 진입"):
+                st.session_state.game_state = 'mission1'
+                st.rerun()
+
+    with col2:
+        st.subheader("2차 관문")
+        if "mission2" in st.session_state.cleared:
+            st.success("✅ 보안의 요새 클리어!")
+        elif "mission1" in st.session_state.cleared:
+            if st.button("보안의 요새 진입"):
+                st.session_state.game_state = 'mission2'
+                st.rerun()
+        else:
+            st.lock("먼저 1차 관문을 통과하세요")
+
+    with col3:
+        st.subheader("3차 관문")
+        if "mission3" in st.session_state.cleared:
+            st.success("✅ 공정의 성 클리어!")
+        elif "mission2" in st.session_state.cleared:
+            if st.button("공정의 성 진입"):
+                st.session_state.game_state = 'mission3'
+                st.rerun()
+        else:
+            st.lock("먼저 2차 관문을 통과하세요")
+
+# [3단계: 개별 미션 화면]
+elif st.session_state.game_state == 'mission1':
+    st.title("🚜 1차 관문: 하도급의 계곡")
+    st.image("master.png", width=200) # 클린 마스터
+    st.write("서면 미발급 문제를 해결하세요!")
+    if st.button("미션 완료 (정답 클릭 시나리오)"):
+        st.session_state.cleared.append("mission1")
+        st.session_state.game_state = 'map'
+        st.rerun()
 
 # --- 4. 시나리오 데이터 ---
 SCENARIOS = {
@@ -144,4 +217,5 @@ elif st.session_state.stage == 'ending':
     if st.button("처음으로 돌아가기"):
         st.session_state.clear()
         st.rerun()
+
 
