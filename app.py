@@ -895,6 +895,87 @@ def _find_first_matching_column(columns, aliases):
     return None
 
 
+
+
+def _read_excel_employee_file(xlsx_path: Path) -> pd.DataFrame:
+    """
+    직원명단 엑셀(.xlsx/.xls) 로더
+    - 1차: pandas.read_excel(engine=openpyxl)
+    - 2차: openpyxl 직접 파싱 (pandas optional dependency 오류 우회)
+    - 실패 시: CSV 저장 안내 메시지 포함 예외 발생
+    """
+    suffix = xlsx_path.suffix.lower()
+
+    # .xlsx 우선 처리
+    if suffix == ".xlsx":
+        # 1) pandas + openpyxl 엔진 시도
+        try:
+            return pd.read_excel(xlsx_path, engine="openpyxl")
+        except Exception as e1:
+            # 2) openpyxl 직접 파싱 시도 (pandas optional dependency 문제 우회)
+            try:
+                import openpyxl  # type: ignore
+            except Exception:
+                raise RuntimeError(
+                    "엑셀 파일 읽기 모듈(openpyxl)이 설치되어 있지 않습니다. "
+                    "requirements.txt에 openpyxl을 추가하거나, 직원명단을 CSV로 저장해 주세요."
+                ) from e1
+
+            try:
+                wb = openpyxl.load_workbook(xlsx_path, read_only=True, data_only=True)
+                ws = wb.active
+
+                # 첫 번째 유효 행을 헤더로 사용
+                header = None
+                data_rows = []
+                for row in ws.iter_rows(values_only=True):
+                    vals = ["" if v is None else str(v).strip() for v in row]
+                    if header is None:
+                        # 완전 빈 행은 스킵
+                        if all(v == "" for v in vals):
+                            continue
+                        header = vals
+                        # 중복/빈 헤더 정리
+                        seen = {}
+                        clean_header = []
+                        for i, h in enumerate(header):
+                            h2 = h if h else f"col_{i+1}"
+                            if h2 in seen:
+                                seen[h2] += 1
+                                h2 = f"{h2}_{seen[h2]}"
+                            else:
+                                seen[h2] = 0
+                            clean_header.append(h2)
+                        header = clean_header
+                        continue
+
+                    # 본문 행
+                    # trailing empty columns 제거는 pandas처럼 엄격히 안 하고 길이만 맞춤
+                    if len(vals) < len(header):
+                        vals = vals + [""] * (len(header) - len(vals))
+                    elif len(vals) > len(header):
+                        vals = vals[:len(header)]
+                    if all(v == "" for v in vals):
+                        continue
+                    data_rows.append(vals)
+
+                if not header:
+                    return pd.DataFrame()
+
+                return pd.DataFrame(data_rows, columns=header)
+            except Exception as e2:
+                raise RuntimeError(f"엑셀 파일 파싱 실패: {e2}") from e2
+
+    # .xls는 pandas 엔진 의존 (xlrd 등)
+    try:
+        return pd.read_excel(xlsx_path)
+    except Exception as e:
+        raise RuntimeError(
+            "구형 엑셀(.xls) 파일을 읽지 못했습니다. .xlsx 또는 CSV로 저장 후 다시 시도해주세요. "
+            f"(원인: {e})"
+        ) from e
+
+
 def load_employee_master_df():
     """
     app.py와 같은 폴더의 직원명단(csv/xlsx)을 자동 탐색해 표준 컬럼(employee_no/name/organization)으로 반환.
@@ -925,7 +1006,7 @@ def load_employee_master_df():
     for p in candidate_paths:
         try:
             if p.suffix.lower() in [".xlsx", ".xls"]:
-                raw_df = pd.read_excel(p)
+                raw_df = _read_excel_employee_file(p)
             else:
                 raw_df = None
                 for enc in ["utf-8-sig", "cp949", "euc-kr", "utf-8"]:
