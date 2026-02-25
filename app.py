@@ -316,6 +316,105 @@ div.stButton > button:first-child:hover {
     box-shadow: inset 0 1px 0 rgba(255,255,255,0.7);
 }
 
+
+
+/* 기관별 누적 점수 미니 카드 (인트로) */
+.org-mini-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 10px;
+    margin: 8px 0 4px 0;
+}
+.org-mini-card {
+    background: linear-gradient(135deg, #121A26, #0F1622);
+    border: 1px solid #263348;
+    border-radius: 12px;
+    padding: 10px 12px;
+}
+.org-mini-title {
+    color: #CFE0FF;
+    font-size: 0.86rem;
+    font-weight: 700;
+    margin-bottom: 4px;
+    line-height: 1.25;
+}
+.org-mini-score {
+    color: #F7FBFF;
+    font-size: 1.15rem;
+    font-weight: 800;
+}
+.org-mini-meta {
+    color: #AFC2E4;
+    font-size: 0.78rem;
+    margin-top: 2px;
+}
+
+/* 다이얼로그(직원 정보 확인) 가독성 보정 */
+div[data-testid="stDialog"] [role="dialog"] {
+    background: #FFFFFF !important;
+    color: #172233 !important;
+}
+div[data-testid="stDialog"] h1,
+div[data-testid="stDialog"] h2,
+div[data-testid="stDialog"] h3,
+div[data-testid="stDialog"] h4,
+div[data-testid="stDialog"] label,
+div[data-testid="stDialog"] p,
+div[data-testid="stDialog"] span,
+div[data-testid="stDialog"] div,
+div[data-testid="stDialog"] small {
+    color: #172233;
+}
+div[data-testid="stDialog"] [data-testid="stMarkdownContainer"] * {
+    color: #172233 !important;
+}
+div[data-testid="stDialog"] [data-testid="stCaptionContainer"] * {
+    color: #4A5A74 !important;
+}
+div[data-testid="stDialog"] [data-testid="stDataFrame"] * {
+    color: #172233 !important;
+}
+div[data-testid="stDialog"] [data-testid="stSelectbox"] > label,
+div[data-testid="stDialog"] [data-testid="stTextInput"] > label {
+    color: #42526B !important;
+    font-weight: 700 !important;
+}
+
+/* 인트로 참가자 확인(메인화면) 읽기 전용 정보 카드 */
+.confirm-readonly-field {
+    margin-top: 2px;
+}
+.confirm-readonly-label {
+    font-size: 0.82rem;
+    color: #B8C7E2 !important;
+    font-weight: 700;
+    margin: 0 0 6px 2px;
+}
+.confirm-readonly-value {
+    background: #121A27;
+    color: #F4F8FF !important;
+    border: 1px solid #33445F;
+    border-radius: 10px;
+    padding: 10px 12px;
+    min-height: 42px;
+    display: flex;
+    align-items: center;
+    font-weight: 700;
+    line-height: 1.25;
+}
+
+/* 퀴즈 하단 네비게이션 */
+.quiz-nav-wrap {
+    margin-top: 14px;
+    padding-top: 10px;
+    border-top: 1px solid #243044;
+}
+.quiz-nav-hint {
+    color: #AFC3E6;
+    font-size: 0.84rem;
+    margin-bottom: 8px;
+}
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -379,7 +478,7 @@ def safe_dataframe(data, **kwargs):
 
 
 def render_top_spacer():
-    st.markdown("<div style='height:24px;'></div>", unsafe_allow_html=True)
+    st.markdown("<div style='height:56px;'></div>", unsafe_allow_html=True)
 
 
 def safe_bar_chart(data, **kwargs):
@@ -495,227 +594,167 @@ ADMIN_PASSWORD = os.environ.get("COMPLIANCE_ADMIN_PASSWORD", "admin2026")
 # =========================================================
 SCENARIO_ORDER = ["subcontracting", "security", "fairtrade"]
 
-SCENARIOS = {
-    "subcontracting": {
-        "title": "🚜 하도급의 계곡",
-        "territory_name": "하도급의 계곡",
-        "briefing": {
-            "title": "하도급 기본 원칙 브리핑",
-            "summary": "하도급 거래에서는 '먼저 서면, 그다음 착공'이 핵심 원칙입니다. 급한 업무라도 절차를 생략하면 분쟁과 법적 리스크가 커집니다.",
-            "red_flags": [
-                "“일단 시작하고 계약서는 나중에”라는 지시",
-                "대금/범위/납기 미확정 상태에서 착수",
-                "구두 지시만 있고 서면 증빙 없음"
-            ],
-            "checklist": [
-                "착공 전 서면 발급 여부 확인",
-                "작업 범위·단가·납기 명시 확인",
-                "내부 승인 절차 완료 후 진행"
-            ],
-            "keywords": ["서면 발급", "착공 전", "분쟁 예방", "책임 명확화"]
-        },
-        "quiz": [
-            {
-                "type": "mcq",
-                "question": "하도급 업무에서 착공 전에 가장 먼저 확인해야 할 항목은 무엇인가요?",
-                "options": [
-                    "현장 인력 배치 여부",
-                    "협력사 담당자 연락처",
-                    "서면 계약(발주서 포함) 발급 여부",
-                    "작업 속도와 긴급성"
-                ],
-                "answer": 2,
-                "score": 30,
-                "choice_feedback": {
-                    0: "인력 배치도 중요하지만, 법적·계약상 리스크 예방의 출발점은 아닙니다.",
-                    1: "실무 편의 요소일 뿐, 준법 핵심 포인트는 아닙니다.",
-                    2: "정답입니다. 착공 전 서면 발급이 핵심 원칙입니다.",
-                    3: "긴급성은 절차 생략의 근거가 될 수 없습니다."
-                },
-                "explain": "서면에는 범위·대금·납기·책임 등이 담겨야 하며, 이를 먼저 확정해야 분쟁과 법 위반 리스크를 줄일 수 있습니다.",
-                "wrong_extra": "현업에서 자주 하는 실수는 ‘급하니까 먼저 시작’입니다. 하지만 이 관행이 누적되면 감사/분쟁 때 가장 취약해집니다."
-            },
-            {
-                "type": "mcq",
-                "question": "팀장이 “이번 건 급하니까 먼저 시작하고 계약서는 나중에 정리하자”고 말했습니다. 가장 적절한 대응은?",
-                "options": [
-                    "관행이니 이번만 예외로 진행한다",
-                    "이메일로만 남기고 바로 착수한다",
-                    "서면 발급 후 진행 원칙을 설명하고 절차 진행을 요청한다",
-                    "협력사에 책임을 떠넘기고 진행한다"
-                ],
-                "answer": 2,
-                "score": 30,
-                "choice_feedback": {
-                    0: "‘관행’은 리스크 면책 사유가 되지 않습니다.",
-                    1: "사후 이메일 정리는 분쟁 시 불충분할 수 있습니다.",
-                    2: "정답입니다. 원칙 설명 + 대안 제시가 가장 좋은 실무 대응입니다.",
-                    3: "책임 전가는 문제 해결이 아니라 리스크 확대입니다."
-                },
-                "explain": "실무적으로는 단순 거절보다 ‘왜 안 되는지’와 ‘어떻게 하면 되는지(절차)’를 함께 안내하는 것이 중요합니다.",
-                "wrong_extra": "관리자/팀장에게도 설명 가능한 표현으로 대응해야 이후 같은 요청이 반복되지 않습니다."
-            },
-            {
-                "type": "text",
-                "question": "팀장에게 보낼 답변 문장을 짧게 작성해보세요. (원칙 설명 + 대안 제시 포함)",
-                "score": 40,
-                "rubric_keywords": {
-                    "원칙 언급": ["서면", "계약", "발급"],
-                    "절차/대안": ["절차", "승인", "확인", "진행"],
-                    "리스크 인식": ["위반", "분쟁", "리스크"]
-                },
-                "sample_answer": "예시) 착공 전 서면 계약(또는 발주서) 확인이 원칙이니, 관련 서면 발급·승인 절차를 먼저 진행한 뒤 착수하겠습니다.",
-                "model_answer": "서면 계약(또는 발주서) 발급 없이 착공하면 분쟁 및 준법 리스크가 있어, 관련 서면 발급과 승인 절차 확인 후 바로 진행하겠습니다."
-            }
-        ]
-    },
-    "security": {
-        "title": "🔐 보안의 요새",
-        "territory_name": "보안의 요새",
-        "briefing": {
-            "title": "보안 기본 원칙 브리핑",
-            "summary": "출처가 불분명한 메일·링크·첨부파일은 클릭하지 않는 것이 원칙입니다. 특히 실행 파일(.exe)은 악성코드/랜섬웨어 위험이 큽니다.",
-            "red_flags": [
-                "발신자가 모호하거나 도메인이 이상함",
-                "‘긴급 확인’ ‘즉시 클릭’ 등 압박 문구",
-                "실행 파일(.exe), 매크로 파일 첨부"
-            ],
-            "checklist": [
-                "클릭 전 발신자/도메인 확인",
-                "의심 메일은 보안팀 신고",
-                "첨부파일 실행 금지, 내부 채널로 재확인"
-            ],
-            "keywords": ["피싱", "첨부파일", "신고", "실행 금지"]
-        },
-        "quiz": [
-            {
-                "type": "mcq",
-                "question": "출처가 불분명한 메일에 ‘인사평가 결과.exe’가 첨부되어 왔을 때 가장 적절한 행동은?",
-                "options": [
-                    "파일명을 바꿔 실행해본다",
-                    "궁금하니 개인 PC에서 먼저 열어본다",
-                    "클릭하지 않고 보안팀에 신고한다",
-                    "동료에게 먼저 열어보라고 전달한다"
-                ],
-                "answer": 2,
-                "score": 30,
-                "choice_feedback": {
-                    0: "파일명 변경은 안전성을 높이지 않습니다.",
-                    1: "개인 PC라도 회사 계정/자료와 연결되어 있으면 위험합니다.",
-                    2: "정답입니다. 클릭 금지 + 신고가 원칙입니다.",
-                    3: "위험을 전파하는 행동으로 더 큰 사고를 부를 수 있습니다."
-                },
-                "explain": "출처 불명 실행 파일은 악성코드 감염 가능성이 매우 높습니다. 의심 메일은 즉시 신고하고 별도 채널로 진위를 확인해야 합니다.",
-                "wrong_extra": "피싱 메일은 ‘궁금증’과 ‘긴급함’을 자극합니다. 호기심에 여는 순간 사고가 시작될 수 있습니다."
-            },
-            {
-                "type": "mcq",
-                "question": "보안 관점에서 가장 위험 신호가 큰 조합은 무엇인가요?",
-                "options": [
-                    "사내 공지 + PDF 첨부",
-                    "익숙한 동료 이름 + 사내 메신저 링크",
-                    "모르는 발신자 + .exe 첨부 + 긴급 클릭 요청",
-                    "거래처 문의 + 전화번호 기재"
-                ],
-                "answer": 2,
-                "score": 30,
-                "choice_feedback": {
-                    0: "PDF도 위험할 수 있지만 일반적으로 실행 파일보다 위험 신호가 약합니다.",
-                    1: "메신저 링크도 확인은 필요하지만 조합 위험도는 상대적으로 낮습니다.",
-                    2: "정답입니다. 발신자 불명 + 실행 파일 + 긴급 유도는 대표적 피싱 패턴입니다.",
-                    3: "거래처 문의도 검증 필요하지만, 이 조합만으로 최고 위험은 아닙니다."
-                },
-                "explain": "위험 신호는 단일 요소보다 ‘여러 요소가 겹칠 때’ 강해집니다. (발신자 불명 + 실행파일 + 긴급 유도)",
-                "wrong_extra": "실무에서는 ‘이상한데 급해서 열었다’가 가장 흔한 사고 원인입니다. 이상하면 멈추는 습관이 중요합니다."
-            },
-            {
-                "type": "text",
-                "question": "의심 메일을 받은 후 팀/보안담당자에게 보낼 보고 문장을 1~2문장으로 작성해보세요.",
-                "score": 40,
-                "rubric_keywords": {
-                    "의심 정황": ["출처", "발신자", "의심", "exe", "첨부"],
-                    "행동": ["클릭", "열지", "실행", "중단"],
-                    "보고/확인": ["보안팀", "신고", "확인", "공유"]
-                },
-                "sample_answer": "예시) 발신자와 첨부파일이 의심되어 실행하지 않았습니다. 보안팀에 공유해 진위 확인 후 조치하겠습니다.",
-                "model_answer": "출처가 불분명한 메일에 실행 파일(.exe) 첨부가 있어 의심되어 파일은 열지 않았습니다. 보안팀에 신고하고 진위 여부를 확인 부탁드립니다."
-            }
-        ]
-    },
-    "fairtrade": {
-        "title": "🛡️ 반부패의 성",
-        "territory_name": "반부패의 성",
-        "briefing": {
-            "title": "반부패(재산상 이익) 기본 원칙 브리핑",
-            "summary": "업무 관련자에게 금품, 상품권, 편의 제공 등 재산상 이익을 받거나 요구하는 행위는 반부패 리스크가 큽니다. 애매한 경우에도 먼저 수수하지 말고 즉시 보고/상담하는 것이 안전합니다.",
-            "red_flags": [
-                "업무 협력사/이해관계자가 상품권·현금성 선물을 제안",
-                "“작은 성의”라며 개인 계좌·개인 연락처로 전달 시도",
-                "승인/평가/계약 직전·직후에 금품 또는 편의 제공 제안"
-            ],
-            "checklist": [
-                "금품·상품권·현금성 이익은 원칙적으로 수수 금지",
-                "즉시 정중히 거절하고, 대화/정황을 기록",
-                "상급자·감사/준법 담당자에게 보고 및 상담"
-            ],
-            "keywords": ["재산상 이익", "금품 수수 금지", "거절", "보고"]
-        },
-        "quiz": [
-            {
-                "type": "mcq",
-                "question": "계약이 막 완료된 후 협력사 담당자가 감사의 의미라며 모바일 상품권을 보내왔습니다. 가장 적절한 대응은?",
-                "options": [
-                    "소액이므로 받는다",
-                    "개인적으로 받고 외부에 알리지 않는다",
-                    "정중히 거절하고 관련 사실을 내부에 보고한다",
-                    "이번만 받고 다음부터 조심한다"
-                ],
-                "answer": 2,
-                "score": 30,
-                "choice_feedback": {
-                    0: "금액이 작아도 업무 관련 이해관계자에게 받는 재산상 이익은 리스크가 있습니다.",
-                    1: "비공개 수수는 사후에 더 큰 문제로 이어질 수 있습니다.",
-                    2: "정답입니다. 수수하지 않고 거절 + 내부 보고가 기본 대응입니다.",
-                    3: "‘이번만’은 반복 위험을 키우고 기준을 무너뜨립니다."
-                },
-                "explain": "핵심은 금액보다 ‘업무 관련성’입니다. 이해관계자와의 관계에서 금품·상품권 수수는 공정성 훼손 및 부정청탁/반부패 이슈로 이어질 수 있어 거절 및 보고가 원칙입니다.",
-                "wrong_extra": "실무에서는 ‘감사 표시’라는 표현으로 제안되는 경우가 많습니다. 표현보다 관계와 시점(계약/평가 전후)을 기준으로 판단하세요."
-            },
-            {
-                "type": "mcq",
-                "question": "업무 상대방이 “현금은 아니고 식사/골프/차량 지원 같은 편의 제공인데 괜찮지 않냐”고 말합니다. 가장 적절한 판단은?",
-                "options": [
-                    "현금이 아니므로 문제가 없다",
-                    "상대가 먼저 제안했으니 괜찮다",
-                    "편의 제공도 재산상 이익이 될 수 있어 수수하지 않고 기준을 확인한다",
-                    "개인 시간에 받으면 업무와 무관하다"
-                ],
-                "answer": 2,
-                "score": 30,
-                "choice_feedback": {
-                    0: "재산상 이익은 현금만 의미하지 않습니다.",
-                    1: "상대 제안 여부와 무관하게 수수 리스크는 발생할 수 있습니다.",
-                    2: "정답입니다. 편의 제공도 재산상 이익에 해당할 수 있어 원칙적으로 거절·확인이 필요합니다.",
-                    3: "개인 시간이라도 업무 관련 이해관계자면 리스크가 남습니다."
-                },
-                "explain": "반부패 관점에서 재산상 이익에는 현금 외에도 상품권, 식사·접대, 편의 제공 등이 포함될 수 있습니다. 애매하면 받지 않고 기준 확인 및 보고가 우선입니다.",
-                "wrong_extra": "‘현금만 아니면 된다’는 오해가 가장 흔합니다. 실제로는 현금성/비현금성 모두 리스크가 될 수 있습니다."
-            },
-            {
-                "type": "text",
-                "question": "업무 상대방의 금품/편의 제공 제안을 거절하고 내부 보고까지 포함하는 답변 문장을 1~2문장으로 작성해보세요.",
-                "score": 40,
-                "rubric_keywords": {
-                    "거절 표현": ["거절", "받을 수 없습니다", "어렵습니다", "불가"],
-                    "재산상 이익/원칙 언급": ["금품", "상품권", "편의", "재산상", "규정", "반부패"],
-                    "보고/기록 조치": ["보고", "공유", "담당", "준법", "감사", "기록"]
-                },
-                "sample_answer": "예시) 업무 관련 편의·상품권 제공은 받을 수 없어 정중히 사양하겠습니다. 관련 제안은 내부 담당에 공유하고 기준에 따라 처리하겠습니다.",
-                "model_answer": "업무 관련자에게 금품이나 편의 제공을 받는 것은 반부패 기준상 수수할 수 없어 정중히 거절드립니다. 관련 제안 내용은 내부 준법/감사 담당자에게 보고하고 기록하겠습니다."
-            }
-        ]
-    }
-}
+SCENARIOS = {'subcontracting': {'title': '🚜 하도급의 계곡',
+                    'briefing': {'title': '하도급 실무 핵심 원칙 브리핑',
+                                 'summary': '하도급 실무에서는 “착공 전 서면 발급”, “대금·범위 변경 시 근거 문서화”, “감액·지연 사유의 객관적 기록”이 핵심입니다. '
+                                            '하도급법상 서면 미발급, 부당감액, 대금지연은 분쟁·제재로 이어질 수 있으므로, 급한 일정일수록 계약·변경·검수 기록을 먼저 남겨야 '
+                                            '합니다.',
+                                 'keywords': ['하도급법', '서면발급 의무', '변경계약 문서화', '부당감액 금지'],
+                                 'red_flags': ['“먼저 작업부터, 계약서는 나중에”처럼 착공 전 서면을 미루는 지시',
+                                               '구두로 범위/단가를 바꾸고 메일·변경합의서 없이 진행',
+                                               '품질/납기 이슈 근거 없이 일괄 감액 또는 지급 보류'],
+                                 'checklist': ['착공 전 발주서/계약서(범위·단가·납기) 발급 여부 확인',
+                                               '변경 발생 시 변경사유·변경금액·승인권자 기록 남기기',
+                                               '검수/납품/하자 근거자료를 지급 판단 문서와 연결하기']},
+                    'quiz': [{'type': 'mcq',
+                              'code': 'SC-1',
+                              'score': 35,
+                              'question': '하도급 업무에서 착공 전 가장 먼저 확인해야 할 항목은 무엇인가요?',
+                              'options': ['서면 계약(발주서 포함) 발급 여부와 핵심 조건 명시 여부',
+                                          '현장 인력 배치 완료 여부',
+                                          '협력사 담당자 연락처 확보 여부',
+                                          '작업 속도와 긴급성'],
+                              'answer': 0,
+                              'choice_feedback': ['정답입니다. 하도급법 분쟁의 출발점은 서면 미발급/조건 불명확인 경우가 많습니다.',
+                                                  '인력 배치는 중요하지만, 계약 근거가 먼저 정리되어야 분쟁을 줄일 수 있습니다.',
+                                                  '연락체계는 보조 요소이며, 계약 조건 확정이 우선입니다.',
+                                                  '긴급한 일정이라도 법적 필수 절차(서면)는 생략할 수 없습니다.'],
+                              'explain': '하도급 실무의 기본은 “서면 선행”입니다. 착공 전 발주서·계약서에 작업범위, 단가, 납기, 검수 기준 등이 명시되어야 이후 '
+                                         '비용/품질/납기 분쟁을 예방할 수 있습니다.',
+                              'wrong_extra': '실무에서는 “급해서 먼저”라는 말이 자주 나오지만, 서면 누락은 추후 부당감액·책임공방의 핵심 쟁점이 됩니다.'},
+                             {'type': 'mcq',
+                              'code': 'SC-2',
+                              'score': 35,
+                              'question': '작업 도중 발주 범위가 늘어나 단가 조정이 필요한 상황입니다. 가장 적절한 조치는 무엇인가요?',
+                              'options': ['변경 내용을 메신저로만 남기고 기존 계약대로 정산한다',
+                                          '변경 범위·단가·납기를 서면(변경합의/발주서)으로 확정 후 진행한다',
+                                          '협력사에 먼저 진행시키고 월말에 내부 기준으로 감액 정산한다',
+                                          '구두 합의만 되면 증빙 없이도 충분하다'],
+                              'answer': 1,
+                              'choice_feedback': ['메신저 기록은 보조자료일 뿐, 변경계약의 핵심 증빙으로는 부족할 수 있습니다.',
+                                                  '정답입니다. 변경계약은 범위·금액·납기·책임을 서면으로 정리해야 분쟁을 줄일 수 있습니다.',
+                                                  '사후 감액 정산은 부당감액 분쟁으로 이어질 가능성이 높습니다.',
+                                                  '구두 합의는 해석이 갈리기 쉬워 분쟁 시 입증이 어렵습니다.'],
+                              'explain': '하도급 변경관리에서는 “변경 전 합의·변경 후 집행” 원칙이 안전합니다. 변경 범위와 단가를 문서화해 승인권자까지 명확히 해야 지급·검수 '
+                                         '단계에서 충돌을 줄일 수 있습니다.',
+                              'wrong_extra': '분쟁사례에서는 “현장 구두지시”가 있었는지, 누가 승인했는지가 핵심 쟁점이 됩니다. 문서화가 가장 강력한 예방책입니다.'},
+                             {'type': 'text',
+                              'code': 'SC-3',
+                              'score': 30,
+                              'question': '팀장에게 보낼 답변 문장을 짧게 작성해보세요. (원칙 설명 + 대안 제시 포함)',
+                              'sample_answer': '착공 전 서면발급이 원칙이라 우선 발주서와 변경조건을 확인하겠습니다. 급한 일정은 임시 범위를 문서로 합의한 뒤 바로 '
+                                               '진행하겠습니다.',
+                              'model_answer': '예시 답변: “하도급 업무는 착공 전 서면 발급과 조건 명확화가 원칙입니다. 현재 범위/단가를 먼저 문서로 확인하고, 긴급 '
+                                              '건이면 최소 범위라도 변경합의서를 즉시 발급받아 진행하겠습니다.”',
+                              'rubric_keywords': {'원칙 설명': ['서면', '계약', '발주서', '원칙', '착공 전'],
+                                                  '리스크 언급': ['분쟁', '리스크', '감액', '증빙', '법'],
+                                                  '대안 제시': ['확인', '합의', '변경', '문서', '진행', '승인']}}]},
+ 'security': {'title': '🔐 정보보안의 요새',
+              'briefing': {'title': '정보보안 기본 원칙 브리핑',
+                           'summary': '정보보안은 “의심 메일/링크 식별”, “비밀번호·인증정보 보호”, “사고 징후 발견 즉시 보고”가 핵심입니다. 실제 사고는 클릭 한 번으로 '
+                                      '시작되는 경우가 많고, 초기 보고가 늦어질수록 개인정보 유출·업무 중단 피해가 커집니다.',
+                           'keywords': ['피싱 메일', '계정정보 보호', '사고 즉시보고', '개인정보'],
+                           'red_flags': ['긴급결재·택배조회 등을 빙자한 링크 클릭 유도 메일',
+                                         '비밀번호·OTP·인증코드를 메신저/메일로 요청하는 행위',
+                                         '이상 로그인/파일 암호화 징후를 발견했는데 개인적으로만 처리'],
+                           'checklist': ['발신자 도메인·링크 주소·첨부파일 확장자(exe, zip 등) 확인',
+                                         '비밀번호/인증코드는 절대 공유하지 않고 공식 시스템에서만 입력',
+                                         '의심 클릭/오발송/계정이상 발견 시 즉시 보안담당·헬프데스크 보고']},
+              'quiz': [{'type': 'mcq',
+                        'code': 'IS-1',
+                        'score': 35,
+                        'question': '다음 중 피싱 메일 가능성이 가장 높은 징후는 무엇인가요?',
+                        'options': ['회사 공지 메일에 사내 포털 링크가 포함되어 있다',
+                                    '발신자 주소가 유사하지만 다른 도메인이고, 압축파일 실행을 요구한다',
+                                    '회의 일정 안내 메일에 회의실 정보가 포함되어 있다',
+                                    '업무 메일에 결재 문서 PDF가 첨부되어 있다'],
+                        'answer': 1,
+                        'choice_feedback': ['링크 자체만으로는 피싱 여부를 단정할 수 없고, 도메인·URL 검증이 필요합니다.',
+                                            '정답입니다. 유사 도메인 + 실행파일/압축파일 유도는 대표적인 피싱 징후입니다.',
+                                            '일반적인 업무 안내 형태로, 추가 검증 요소가 더 필요합니다.',
+                                            'PDF 첨부만으로는 판단하기 어렵고 발신자/맥락 확인이 먼저입니다.'],
+                        'explain': '피싱 메일은 실제 조직명을 흉내 낸 유사 도메인, 긴급한 표현, 실행형 첨부파일 요구가 자주 나타납니다. 특히 압축파일/실행파일은 악성코드 감염의 '
+                                   '주요 경로입니다.',
+                        'wrong_extra': '“바빠서 일단 열어보자”가 사고의 출발점이 됩니다. 의심되면 클릭 전에 보안팀 확인이 우선입니다.'},
+                       {'type': 'mcq',
+                        'code': 'IS-2',
+                        'score': 35,
+                        'question': '직원이 피싱 페이지에 계정정보를 입력한 사실을 뒤늦게 알게 되었습니다. 가장 우선해야 할 조치는?',
+                        'options': ['본인 PC만 재부팅하고 아무에게도 알리지 않는다',
+                                    '다음날 출근 후 천천히 비밀번호를 바꾼다',
+                                    '즉시 비밀번호 변경, 접속 차단 요청, 보안담당자/헬프데스크에 사고 보고',
+                                    '메일을 삭제했으니 추가 조치는 필요 없다'],
+                        'answer': 2,
+                        'choice_feedback': ['재부팅만으로는 계정 탈취·추가 접근을 막을 수 없습니다.',
+                                            '지연 대응은 피해를 키울 수 있습니다. 즉시 조치가 중요합니다.',
+                                            '정답입니다. 계정보호 조치와 사고보고를 동시에 진행해야 확산을 줄일 수 있습니다.',
+                                            '삭제는 흔적 제거가 아니며, 이미 입력한 정보는 유출됐을 수 있습니다.'],
+                        'explain': '계정정보 입력 사고는 “즉시 비밀번호 변경 + 보안담당 통보 + 추가 인증 점검”이 기본입니다. 초기 10~30분 대응이 피해 규모를 크게 '
+                                   '좌우합니다.',
+                        'wrong_extra': '실제 사고 대응에서 보고 지연은 추가 접속·권한남용을 허용해 피해를 확대시키는 원인이 됩니다.'},
+                       {'type': 'text',
+                        'code': 'IS-3',
+                        'score': 30,
+                        'question': '보안담당자에게 보낼 사고 초동보고 문장을 짧게 작성해보세요. (상황 + 조치 + 요청 포함)',
+                        'sample_answer': '의심 메일 링크를 눌러 계정정보 입력 가능성이 있어 즉시 비밀번호를 변경했습니다. 접속기록 점검과 추가 조치 안내를 요청드립니다.',
+                        'model_answer': '예시 답변: “금일 의심 메일 링크를 클릭해 계정정보 입력 가능성이 확인되어 즉시 비밀번호를 변경했습니다. 관련 계정 접속기록 점검과 추가 '
+                                        '차단 조치가 필요한지 확인 부탁드립니다.”',
+                        'rubric_keywords': {'상황 공유': ['의심', '메일', '링크', '계정', '입력', '사고'],
+                                            '즉시 조치': ['비밀번호', '변경', '차단', '로그아웃', '조치'],
+                                            '요청/보고': ['보고', '확인', '점검', '요청', '보안', '헬프데스크']}}]},
+ 'fairtrade': {'title': '🛡️ 공정거래의 성',
+               'briefing': {'title': '공정거래·청렴 기본 원칙 브리핑',
+                            'summary': '공정거래·청렴 실무에서는 “이해관계자와의 거리 유지”, “부당한 편의·청탁 거절”, “접촉·제안 발생 시 기록 및 보고”가 핵심입니다. '
+                                       '청탁금지법, 공정거래 관련 내부규정, 윤리강령 위반은 개인 문제를 넘어 회사의 평판·입찰 리스크로 이어질 수 있습니다.',
+                            'keywords': ['청탁금지법', '이해충돌 예방', '금품·편의 거절', '윤리보고'],
+                            'red_flags': ['협력사/거래처가 식사·상품권·편의를 반복적으로 제공',
+                                          '평가/입찰 담당자에게 결과를 미리 알려달라는 요청',
+                                          '지인·퇴직자 네트워크를 통한 우회 청탁 제안'],
+                            'checklist': ['거래처 접촉 시 목적·참석자·제공내역을 내부기준에 따라 기록',
+                                          '금품/향응/편의 제공 제안은 즉시 거절하고 상급자·윤리채널 공유',
+                                          '입찰·평가 정보는 권한자 외 비공개, 문의 시 공식 절차로 안내']},
+               'quiz': [{'type': 'mcq',
+                         'code': 'FT-1',
+                         'score': 35,
+                         'question': '평가를 앞둔 협력사가 “작은 감사 표시”라며 상품권을 전달하려고 합니다. 가장 적절한 대응은?',
+                         'options': ['금액이 작으면 받고 넘어간다',
+                                     '개인적으로 거절하고 기록은 남기지 않는다',
+                                     '정중히 거절하고, 회사 기준에 따라 상급자/윤리채널에 공유한다',
+                                     '평가가 끝난 뒤 받겠다고 안내한다'],
+                         'answer': 2,
+                         'choice_feedback': ['금액과 무관하게 이해관계 상황에서는 수수가 리스크가 됩니다.',
+                                             '거절은 좋지만 기록·공유가 없으면 반복 제안이나 오해를 막기 어렵습니다.',
+                                             '정답입니다. 거절 + 보고(기록)가 청렴 리스크 관리의 기본입니다.',
+                                             '평가 이후라도 이해관계가 남아 있을 수 있어 부적절합니다.'],
+                         'explain': '이해관계자 금품·편의 제공은 금액보다 상황과 직무 관련성이 중요합니다. 실무에서는 수수 자체를 피하고, 제안 사실을 기록/공유해 재발과 오해를 '
+                                    '예방해야 합니다.',
+                         'wrong_extra': '분쟁·감사 시에는 “받았는지”뿐 아니라 “제안이 있었을 때 회사가 어떻게 대응했는지”도 중요하게 확인됩니다.'},
+                        {'type': 'mcq',
+                         'code': 'FT-2',
+                         'score': 35,
+                         'question': '입찰 준비 중 거래처가 “평가 기준과 경쟁사 상황을 조금만 알려달라”고 요청했습니다. 가장 적절한 답변은?',
+                         'options': ['관계 유지를 위해 구두로 일부 힌트만 준다',
+                                     '공식 공지된 범위만 안내하고, 추가 문의는 공식 절차로 요청하도록 한다',
+                                     '비공식 메신저로 평가 일정만 알려준다',
+                                     '퇴근 후 사적으로 만나 설명한다'],
+                         'answer': 1,
+                         'choice_feedback': ['구두 힌트도 정보 비대칭/공정성 훼손 문제가 발생할 수 있습니다.',
+                                             '정답입니다. 공개 가능한 정보만 동일하게 제공하고, 나머지는 공식 채널로 통제해야 합니다.',
+                                             '비공식 전달은 기록이 남지 않아 감사 대응이 어렵습니다.',
+                                             '사적 접촉은 오해와 청탁 리스크를 키웁니다.'],
+                         'explain': '입찰·평가 정보는 공정성 확보가 핵심입니다. 모든 거래처에 동일한 기준으로 공개하고, 비공개 정보는 공유하지 않는 것이 원칙입니다.',
+                         'wrong_extra': '공정거래·청렴 이슈는 실제 정보 유출뿐 아니라 “특정 업체만 더 알았는가”라는 절차적 공정성 문제로도 확산됩니다.'},
+                        {'type': 'text',
+                         'code': 'FT-3',
+                         'score': 30,
+                         'question': '거래처 제안을 거절하고 원칙을 안내하는 답변 문장을 짧게 작성해보세요. (원칙 + 대안 채널 안내 포함)',
+                         'sample_answer': '평가 관련 정보는 공정성을 위해 공식 공지 범위에서만 안내 가능합니다. 추가 문의는 지정된 접수창구로 요청해 주시면 동일 기준으로 '
+                                          '답변드리겠습니다.',
+                         'model_answer': '예시 답변: “입찰/평가 정보는 공정성 원칙에 따라 공개된 내용만 안내드릴 수 있습니다. 추가 문의는 공식 질의 채널로 접수해 주시면 '
+                                         '모든 업체에 동일 기준으로 회신하겠습니다.”',
+                         'rubric_keywords': {'원칙 설명': ['공정', '원칙', '공식', '기준', '규정'],
+                                             '거절 표현': ['어렵', '불가', '제공', '거절', '안내'],
+                                             '대안 제시': ['문의', '채널', '접수', '회신', '공개']}}]}}
 
 THEME_TOTAL_SCORE = 100
 TOTAL_SCORE = len(SCENARIO_ORDER) * THEME_TOTAL_SCORE
@@ -1363,7 +1402,23 @@ def _render_modal_readonly_field(container, label: str, value: str):
         unsafe_allow_html=True,
     )
 
+
+def _render_confirm_readonly_field(container, label: str, value: str):
+    with container:
+        st.markdown(
+            f"""
+            <div class='confirm-readonly-field'>
+              <div class='confirm-readonly-label'>{label}</div>
+              <div class='confirm-readonly-value'>{html.escape(str(value or '-'))}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+
 def _render_employee_lookup_popup_body(name_query: str = ""):
+    st.markdown("<div style='font-size:1.05rem;font-weight:800;color:#172233;margin-bottom:4px;'>📋 직원 정보 확인</div>", unsafe_allow_html=True)
+    st.caption("사번, 이름, 소속 기관을 확인한 뒤 정확한 본인 정보를 선택하세요.")
     candidates = pd.DataFrame(st.session_state.get("employee_lookup_candidates", []))
     if candidates.empty:
         st.info("조회 결과가 없습니다.")
@@ -1378,7 +1433,6 @@ def _render_employee_lookup_popup_body(name_query: str = ""):
     show_df = candidates[["employee_no", "name", "organization"]].copy()
     show_df.columns = ["사번", "이름", "소속 기관"]
 
-    st.caption("사번, 이름, 소속 기관을 확인한 뒤 정확한 본인 정보를 선택하세요.")
     safe_dataframe(show_df, use_container_width=True, height=min(320, 90 + len(show_df) * 35))
 
     exact_name = (name_query or "").strip()
@@ -2265,16 +2319,13 @@ def render_mcq_question(m_key: str, q_idx: int, q_data: dict):
             unsafe_allow_html=True,
         )
 
-        total_q = len(SCENARIOS[m_key]["quiz"])
-        if q_idx < total_q - 1:
-            if st.button("다음 문제로 ▶", key=f"next_{m_key}_{q_idx}", use_container_width=True):
-                progress["current_idx"] += 1
+        c_edit, c_hint = st.columns([1.1, 1.9])
+        with c_edit:
+            if st.button("✏️ 답안 수정하기", key=f"edit_mcq_{m_key}_{q_idx}", use_container_width=True):
+                submissions.pop(q_idx, None)
                 st.rerun()
-        else:
-            mark_theme_complete_if_ready(m_key)
-            if st.button("🏁 테마 정복 완료! 맵으로 돌아가기", key=f"finish_{m_key}", use_container_width=True):
-                st.session_state.stage = "map"
-                st.rerun()
+        with c_hint:
+            st.caption("이전/다음 문제 버튼으로 이동할 수 있습니다. 수정 후 다시 제출하면 최신 답안 기준으로 점수가 반영됩니다.")
         return
 
     q_text = html.escape(str(q_data['question']))
@@ -2367,10 +2418,13 @@ def render_text_question(m_key: str, q_idx: int, q_data: dict):
         with st.expander("모범답안 보기"):
             st.write(q_data["model_answer"])
 
-        mark_theme_complete_if_ready(m_key)
-        if st.button("🏁 테마 정복 완료! 맵으로 돌아가기", key=f"end_theme_{m_key}", use_container_width=True):
-            st.session_state.stage = "map"
-            st.rerun()
+        c_edit, c_hint = st.columns([1.1, 1.9])
+        with c_edit:
+            if st.button("✏️ 답안 수정하기", key=f"edit_text_{m_key}_{q_idx}", use_container_width=True):
+                submissions.pop(q_idx, None)
+                st.rerun()
+        with c_hint:
+            st.caption("이전/다음 문제 버튼으로 이동할 수 있습니다. 수정 후 다시 제출하면 최신 답안 기준으로 점수가 반영됩니다.")
         return
 
     q_text = html.escape(str(q_data['question']))
@@ -2446,6 +2500,39 @@ def render_text_question(m_key: str, q_idx: int, q_data: dict):
         st.rerun()
 
 
+def render_quiz_navigation_controls(m_key: str):
+    ensure_quiz_progress(m_key)
+    progress = st.session_state.quiz_progress[m_key]
+    q_list = SCENARIOS[m_key]["quiz"]
+    total_q = len(q_list)
+    idx = int(progress.get("current_idx", 0))
+    submissions = progress.get("submissions", {})
+    current_submitted = idx in submissions
+
+    st.markdown("<div class='quiz-nav-wrap'></div>", unsafe_allow_html=True)
+    if current_submitted:
+        st.markdown("<div class='quiz-nav-hint'>제출 완료된 문항입니다. 이전 문항으로 돌아가 답안을 수정하거나 다음 문항으로 이동할 수 있습니다.</div>", unsafe_allow_html=True)
+    else:
+        st.markdown("<div class='quiz-nav-hint'>먼저 현재 문항을 제출한 뒤 다음 문항으로 이동할 수 있습니다.</div>", unsafe_allow_html=True)
+
+    c1, c2 = st.columns([1, 1], gap='large')
+    with c1:
+        if st.button("◀ 이전 문제", key=f"nav_prev_{m_key}_{idx}", use_container_width=True, disabled=(idx <= 0)):
+            progress["current_idx"] = max(0, idx - 1)
+            st.rerun()
+    with c2:
+        if idx < total_q - 1:
+            if st.button("다음 문제 ▶", key=f"nav_next_{m_key}_{idx}", use_container_width=True, disabled=(not current_submitted)):
+                progress["current_idx"] = min(total_q - 1, idx + 1)
+                st.rerun()
+        else:
+            all_submitted = len(submissions) == total_q
+            mark_theme_complete_if_ready(m_key)
+            if st.button("🏁 테마 정복 완료! 맵으로 돌아가기", key=f"nav_finish_{m_key}", use_container_width=True, disabled=(not all_submitted)):
+                st.session_state.stage = "map"
+                st.rerun()
+
+
 def render_quiz(m_key: str):
     mission = SCENARIOS[m_key]
     ensure_quiz_progress(m_key)
@@ -2471,19 +2558,20 @@ def render_quiz(m_key: str):
         unsafe_allow_html=True,
     )
 
-    col_left, col_right = st.columns([1.0, 1.65], gap='large')
+    # 15인치 노트북 기준 가독성을 고려해 좌/우 비율과 여백을 조금 넉넉하게 조정
+    col_left, col_right = st.columns([1.05, 1.95], gap='large')
     with col_left:
         st.markdown(
             """
-            <div class='card' style='margin-bottom:8px;'>
+            <div class='card' style='margin-bottom:10px;'>
               <div class='card-title'>안내 캐릭터</div>
-              <div style='color:#BFD0EC; font-size:0.9rem;'>문항 옆에서 핵심 포인트를 함께 확인해보세요.</div>
+              <div style='color:#D0DCF2; font-size:0.92rem; line-height:1.45;'>문항 옆에서 핵심 포인트를 함께 확인해보세요.</div>
             </div>
             """,
             unsafe_allow_html=True,
         )
         if MASTER_IMAGE.exists():
-            img_c1, img_c2, img_c3 = st.columns([0.08, 0.84, 0.08])
+            img_c1, img_c2, img_c3 = st.columns([0.05, 0.90, 0.05])
             with img_c2:
                 st.image(str(MASTER_IMAGE), use_container_width=True)
             st.markdown("<div class='quiz-left-caption'>클린 마스터</div>", unsafe_allow_html=True)
@@ -2495,7 +2583,7 @@ def render_quiz(m_key: str):
             <div class='card quiz-side-tip'>
               <div class='card-title'>진행 팁</div>
               <div>정답 여부보다 <b>왜 그런지</b>를 이해하는 게 핵심이에요.</div>
-              <div style='margin-top:6px; color:#BFD0EC;'>보기/해설을 읽고 현업 상황에 어떻게 적용할지 같이 생각해보세요.</div>
+              <div style='margin-top:6px; color:#C7D7F2;'>보기/해설을 읽고 현업 상황에 어떻게 적용할지 같이 생각해보세요.</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -2506,13 +2594,17 @@ def render_quiz(m_key: str):
             st.rerun()
 
     with col_right:
-        st.markdown("<div style='height:4px;'></div>", unsafe_allow_html=True)
+        st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
         if q_data["type"] == "mcq":
             render_mcq_question(m_key, current_idx, q_data)
         elif q_data["type"] == "text":
             render_text_question(m_key, current_idx, q_data)
         else:
             st.error("지원하지 않는 문항 타입입니다.")
+
+        # 제출 버튼과 너무 붙지 않도록 하단 여백 + 내비게이션 제공
+        st.markdown("<div style='height:10px;'></div>", unsafe_allow_html=True)
+        render_quiz_navigation_controls(m_key)
 
 # =========================================================
 # 7) 메인 화면 분기
@@ -2610,19 +2702,20 @@ if st.session_state.stage == "intro":
     if selected_emp:
         st.markdown("### ✅ 확인된 참가자 정보")
         col_a, col_b, col_c = st.columns(3)
-        with col_a:
-            st.text_input("사번", value=selected_emp.get("employee_no", ""), disabled=True, key="confirm_emp_no")
-        with col_b:
-            st.text_input("이름", value=selected_emp.get("name", ""), disabled=True, key="confirm_emp_name")
-        with col_c:
-            st.text_input("소속 기관", value=selected_emp.get("organization", ""), disabled=True, key="confirm_emp_org")
+        _render_confirm_readonly_field(col_a, "사번", selected_emp.get("employee_no", ""))
+        _render_confirm_readonly_field(col_b, "이름", selected_emp.get("name", ""))
+        _render_confirm_readonly_field(col_c, "소속 기관", selected_emp.get("organization", ""))
 
+        st.markdown("<div style='height:6px;'></div>", unsafe_allow_html=True)
         if st.button("모험 시작하기", use_container_width=True):
-            if selected_emp.get("name"):
+            emp_no = str(selected_emp.get("employee_no", "")).strip()
+            emp_name = str(selected_emp.get("name", "")).strip()
+            emp_org = str(selected_emp.get("organization", "")).strip()
+            if emp_name and emp_no:
                 st.session_state.user_info = {
-                    "employee_no": selected_emp.get("employee_no", ""),
-                    "name": selected_emp.get("name", ""),
-                    "org": selected_emp.get("organization", ""),
+                    "employee_no": emp_no,
+                    "name": emp_name,
+                    "org": emp_org,
                 }
                 st.session_state.stage = "map"
                 st.rerun()
