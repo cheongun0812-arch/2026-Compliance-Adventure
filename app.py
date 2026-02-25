@@ -292,6 +292,30 @@ div.stButton > button:first-child:hover {
     }
 }
 
+/* 직원 확인 모달용 읽기 전용 정보 박스 (검은 disabled input 대체) */
+.modal-readonly-field {
+    margin-top: 2px;
+}
+.modal-readonly-label {
+    font-size: 0.82rem;
+    color: #95A4BF !important;
+    font-weight: 700;
+    margin: 0 0 6px 2px;
+}
+.modal-readonly-value {
+    background: #F6F8FC;
+    color: #1A2433 !important;
+    border: 1px solid #D5DEEC;
+    border-radius: 10px;
+    padding: 10px 12px;
+    min-height: 42px;
+    display: flex;
+    align-items: center;
+    font-weight: 600;
+    line-height: 1.25;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.7);
+}
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -1325,6 +1349,20 @@ def _employee_candidate_label(row: dict) -> str:
     return f"[{emp_no}] {name} / {org}"
 
 
+
+def _render_modal_readonly_field(container, label: str, value: str):
+    label_safe = html.escape(str(label))
+    value_safe = html.escape(str(value) if value is not None else "")
+    container.markdown(
+        f"""
+        <div class="modal-readonly-field">
+            <div class="modal-readonly-label">{label_safe}</div>
+            <div class="modal-readonly-value">{value_safe}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
 def _render_employee_lookup_popup_body(name_query: str = ""):
     candidates = pd.DataFrame(st.session_state.get("employee_lookup_candidates", []))
     if candidates.empty:
@@ -1367,9 +1405,9 @@ def _render_employee_lookup_popup_body(name_query: str = ""):
 
     preview = candidates.iloc[int(selected_idx)].to_dict()
     p1, p2, p3 = st.columns(3)
-    p1.text_input("사번", value=str(preview.get("employee_no", "")), disabled=True, key="employee_modal_preview_no")
-    p2.text_input("이름", value=str(preview.get("name", "")), disabled=True, key="employee_modal_preview_name")
-    p3.text_input("소속 기관", value=str(preview.get("organization", "")), disabled=True, key="employee_modal_preview_org")
+    _render_modal_readonly_field(p1, "사번", str(preview.get("employee_no", "")))
+    _render_modal_readonly_field(p2, "이름", str(preview.get("name", "")))
+    _render_modal_readonly_field(p3, "소속 기관", str(preview.get("organization", "")))
 
     st.markdown("<div class='brief-actions-wrap'></div>", unsafe_allow_html=True)
     c1, c2 = st.columns([1, 1], gap='large')
@@ -1652,6 +1690,64 @@ def _build_participant_snapshot(df: pd.DataFrame):
     }
 
 
+
+
+
+def render_intro_org_cumulative_board():
+    st.markdown("### 🏢 기관별 누적 점수 현황")
+
+    df, err = _load_log_df()
+    if err:
+        st.info(err)
+        return
+
+    try:
+        snap = _build_participant_snapshot(df)
+        participants = snap.get("participants", pd.DataFrame())
+        if participants is None or participants.empty:
+            st.info("표시할 누적 점수 데이터가 없습니다.")
+            return
+
+        # 참여자별 최신 점수 합계를 기준으로 기관 누적 점수 계산
+        org_score = (
+            participants.groupby("organization", as_index=False)
+            .agg(
+                cumulative_score=("total_score", "sum"),
+                participants=("learner_id", "nunique"),
+                avg_score=("total_score", "mean"),
+            )
+            .sort_values(["cumulative_score", "participants"], ascending=[False, False])
+            .reset_index(drop=True)
+        )
+
+        if org_score.empty:
+            st.info("기관별 누적 점수 데이터가 없습니다.")
+            return
+
+        # 메인 화면에는 누적 점수 중심으로만 간단히 노출
+        cards = []
+        for _, row in org_score.iterrows():
+            org_name = str(row.get("organization", "미분류"))
+            cum = int(round(float(row.get("cumulative_score", 0) or 0)))
+            ppl = int(row.get("participants", 0) or 0)
+            avg = float(row.get("avg_score", 0) or 0)
+            cards.append(
+                f"""
+                <div class='org-mini-card'>
+                  <div class='org-mini-title'>{org_name}</div>
+                  <div class='org-mini-score'>{cum}점</div>
+                  <div class='org-mini-meta'>참여 {ppl}명 · 평균 {avg:.1f}점</div>
+                </div>
+                """
+            )
+
+        st.markdown(
+            "<div class='org-mini-grid'>" + "".join(cards) + "</div>",
+            unsafe_allow_html=True,
+        )
+
+    except Exception as e:
+        st.info(f"기관별 누적 점수 표시 중 오류가 발생했습니다: {e}")
 
 
 def render_admin_password_gate():
@@ -2438,14 +2534,16 @@ with st.sidebar:
 
 if st.session_state.stage == "intro":
     render_top_spacer()
-    st.title("🛡️ 2026 Compliance Adventure")
-    st.caption("Guardian Training · 컴플라이언스 테마 정복형 학습")
 
     intro_map = get_current_map_image()
     if intro_map:
         show_map_with_fade(intro_map)
     else:
         st.info("맵 이미지를 추가하면 인트로 연출이 더 좋아집니다.")
+
+    st.markdown("<div style='height:10px;'></div>", unsafe_allow_html=True)
+    st.title("🛡️ 2026 Compliance Adventure")
+    st.caption("Guardian Training · 컴플라이언스 테마 정복형 학습")
 
     st.markdown(
         """
@@ -2457,8 +2555,7 @@ if st.session_state.stage == "intro":
         unsafe_allow_html=True,
     )
 
-    with st.expander("🏢 기관별 누적 현황 (미리보기)", expanded=False):
-        render_org_dashboard(compact=True)
+    render_intro_org_cumulative_board()
     st.caption("상세 통계는 좌측 사이드바의 ‘관리자 대시보드’에서 확인할 수 있습니다.")
 
     emp_df, emp_meta_msg = load_employee_master_df()
