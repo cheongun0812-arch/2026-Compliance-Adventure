@@ -171,7 +171,7 @@ BASE_DIR = Path(__file__).parent if "__file__" in globals() else Path.cwd()
 ASSET_DIR = BASE_DIR
 LOG_FILE = BASE_DIR / "compliance_training_log.csv"
 LOG_FIELDNAMES = [
-    "timestamp", "name", "organization", "department",
+    "timestamp", "employee_no", "name", "organization", "department",
     "mission_key", "mission_title", "question_index", "question_code",
     "question_type", "question", "selected_or_text", "is_correct",
     "awarded_score", "max_score", "attempt_no_for_mission"
@@ -204,15 +204,20 @@ THEME_ICONS = {
 }
 
 
-ORG_OPTIONS = [
-    "사업총괄",
-    "강원본부",
-    "강북본부",
-    "경영총괄",
-    "강남본부",
-    "서부본부",
-    "품질지원단",
+EMPLOYEE_MASTER_CANDIDATE_NAMES = [
+    "employee_master.xlsx", "employee_master.csv",
+    "employee_list.xlsx", "employee_list.csv",
+    "employees.xlsx", "employees.csv",
+    "직원명단.xlsx", "직원명단.csv",
+    "사번명단.xlsx", "사번명단.csv",
+    "임직원명단.xlsx", "임직원명단.csv",
 ]
+
+EMPLOYEE_COL_ALIASES = {
+    "employee_no": ["employee_no", "emp_no", "empid", "employeeid", "employeenumber", "사번", "직원번호", "사원번호", "임직원번호", "직원코드", "사번코드"],
+    "name": ["name", "employee_name", "fullname", "성명", "이름", "직원명", "사원명"],
+    "organization": ["organization", "org", "department", "dept", "소속", "소속기관", "기관", "조직", "본부", "부서"],
+}
 
 BGM = {
     "intro": BASE_DIR / "bgm_intro.mp3",
@@ -450,14 +455,6 @@ SCENARIOS = {
     }
 }
 
-DEPT_GUIDE = {
-    "영업팀": "거래처 접점이 많아 접대·리베이트·공정거래 이슈에 특히 민감합니다.",
-    "구매팀": "계약·하도급·입찰 문서화와 절차 준수가 핵심입니다.",
-    "인사팀": "개인정보 보호, 평가정보 보안, 공정한 절차가 중요합니다.",
-    "IT지원팀": "피싱·첨부파일·권한관리·사고 대응 체계가 핵심 리스크입니다.",
-    "감사팀": "증빙/보고체계/내부통제 점검 관점으로 보시면 좋습니다."
-}
-
 THEME_TOTAL_SCORE = 100
 TOTAL_SCORE = len(SCENARIO_ORDER) * THEME_TOTAL_SCORE
 
@@ -483,6 +480,9 @@ def init_state():
         "pending_sfx": None,
         "bgm_enabled": True,
         "audio_debug": False,
+        "employee_lookup_candidates": [],
+        "employee_selected_record": None,
+        "employee_lookup_modal_open": False,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -672,6 +672,8 @@ def _normalize_log_row(raw: dict) -> dict:
         clean[key] = v
 
     # 스키마 호환 보정 (구버전 로그 포함)
+    if "employee_no" not in clean:
+        clean["employee_no"] = clean.get("emp_no", "") or clean.get("사번", "") or clean.get("직원번호", "")
     if not str(clean.get("organization", "")).strip():
         clean["organization"] = clean.get("department", "") or "미분류"
     if "department" not in clean:
@@ -702,7 +704,7 @@ def _normalize_log_row(raw: dict) -> dict:
         except Exception:
             norm[col] = 0
     # 문자열 컬럼 보정
-    for col in ["timestamp", "name", "organization", "department", "mission_key", "mission_title", "question_code", "question_type", "question", "selected_or_text", "is_correct"]:
+    for col in ["timestamp", "employee_no", "name", "organization", "department", "mission_key", "mission_title", "question_code", "question_type", "question", "selected_or_text", "is_correct"]:
         val = norm.get(col, "")
         if val is None:
             val = ""
@@ -831,13 +833,16 @@ def _coerce_log_df(df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
 
     df = df.copy()
+    # 중복 컬럼 제거 (구버전/깨진 CSV 방어)
+    if hasattr(df.columns, "duplicated") and df.columns.duplicated().any():
+        df = df.loc[:, ~df.columns.duplicated()].copy()
     # 예상 컬럼 채우기
     for col in LOG_FIELDNAMES:
         if col not in df.columns:
             df[col] = ""
 
     # 문자열 컬럼 정리
-    for col in ["name", "organization", "department", "mission_key", "mission_title", "question_code", "question_type", "question", "selected_or_text", "is_correct"]:
+    for col in ["employee_no", "name", "organization", "department", "mission_key", "mission_title", "question_code", "question_type", "question", "selected_or_text", "is_correct"]:
         df[col] = df[col].fillna("").astype(str)
 
     # 기관 보정
@@ -872,6 +877,194 @@ def _coerce_log_df(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _normalize_col_key(col_name: str) -> str:
+    return re.sub(r"[\s_\-\(\)\[\]/]+", "", str(col_name).strip().lower())
+
+
+def _find_first_matching_column(columns, aliases):
+    norm_map = {_normalize_col_key(c): c for c in columns}
+    alias_norms = [_normalize_col_key(a) for a in aliases]
+    for a in alias_norms:
+        if a in norm_map:
+            return norm_map[a]
+    # 부분 일치 fallback
+    for c in columns:
+        nc = _normalize_col_key(c)
+        if any(a in nc or nc in a for a in alias_norms if a):
+            return c
+    return None
+
+
+def load_employee_master_df():
+    """
+    app.py와 같은 폴더의 직원명단(csv/xlsx)을 자동 탐색해 표준 컬럼(employee_no/name/organization)으로 반환.
+    """
+    candidate_paths = []
+    existing_names = {p.name.lower(): p for p in BASE_DIR.iterdir() if p.is_file()}
+
+    # 1) 우선순위 파일명
+    for nm in EMPLOYEE_MASTER_CANDIDATE_NAMES:
+        p = BASE_DIR / nm
+        if p.exists() and p.is_file():
+            candidate_paths.append(p)
+
+    # 2) 패턴 탐색
+    for p in BASE_DIR.iterdir():
+        if not p.is_file():
+            continue
+        lower = p.name.lower()
+        if p.suffix.lower() not in [".csv", ".xlsx", ".xls"]:
+            continue
+        if p not in candidate_paths and any(k in lower for k in ["employee", "employees", "staff", "직원", "사번", "명단", "임직원"]):
+            candidate_paths.append(p)
+
+    if not candidate_paths:
+        return None, "직원 명단 파일 미탐지 (예: employee_master.xlsx / 직원명단.xlsx)"
+
+    last_err = None
+    for p in candidate_paths:
+        try:
+            if p.suffix.lower() in [".xlsx", ".xls"]:
+                raw_df = pd.read_excel(p)
+            else:
+                raw_df = None
+                for enc in ["utf-8-sig", "cp949", "euc-kr", "utf-8"]:
+                    try:
+                        raw_df = pd.read_csv(p, encoding=enc)
+                        break
+                    except Exception:
+                        continue
+                if raw_df is None:
+                    raw_df = pd.read_csv(p, engine="python", on_bad_lines="skip")
+
+            if raw_df is None or raw_df.empty:
+                continue
+
+            raw_df.columns = [str(c).strip() for c in raw_df.columns]
+            emp_col = _find_first_matching_column(raw_df.columns, EMPLOYEE_COL_ALIASES["employee_no"])
+            name_col = _find_first_matching_column(raw_df.columns, EMPLOYEE_COL_ALIASES["name"])
+            org_col = _find_first_matching_column(raw_df.columns, EMPLOYEE_COL_ALIASES["organization"])
+
+            if name_col is None:
+                last_err = f"{p.name}: 이름 컬럼을 찾지 못함"
+                continue
+
+            # 사번 컬럼 없으면 빈값 허용(단, 동명이인 구분력 저하 안내)
+            if emp_col is None:
+                raw_df["__employee_no__"] = ""
+                emp_col = "__employee_no__"
+            if org_col is None:
+                raw_df["__organization__"] = "미분류"
+                org_col = "__organization__"
+
+            df = pd.DataFrame({
+                "employee_no": raw_df[emp_col],
+                "name": raw_df[name_col],
+                "organization": raw_df[org_col],
+            })
+
+            for c in ["employee_no", "name", "organization"]:
+                df[c] = df[c].fillna("").astype(str).str.strip()
+
+            df = df[df["name"] != ""].copy()
+            df["organization"] = df["organization"].replace("", "미분류")
+            # 중복 행 제거
+            df = df.drop_duplicates(subset=["employee_no", "name", "organization"]).reset_index(drop=True)
+
+            msg = f"직원 명단 파일 로드 완료: {p.name} · {len(df)}명"
+            if (df["employee_no"].str.strip() == "").all():
+                msg += " (사번 컬럼 미검출: 동명이인 구분은 소속 기준으로만 가능)"
+            return df, msg
+
+        except Exception as e:
+            last_err = f"{p.name}: {e}"
+            continue
+
+    return None, f"직원 명단 파일을 읽지 못했습니다. ({last_err or '형식 확인 필요'})"
+
+
+def _employee_candidate_label(row: dict) -> str:
+    emp_no = str(row.get("employee_no", "")).strip() or "사번없음"
+    name = str(row.get("name", "")).strip() or "이름미상"
+    org = str(row.get("organization", "")).strip() or "미분류"
+    return f"[{emp_no}] {name} / {org}"
+
+
+def _render_employee_lookup_popup_body(name_query: str = ""):
+    candidates = pd.DataFrame(st.session_state.get("employee_lookup_candidates", []))
+    if candidates.empty:
+        st.info("조회 결과가 없습니다.")
+        if st.button("닫기", key="employee_modal_close_empty", use_container_width=True):
+            st.session_state.employee_lookup_modal_open = False
+            st.rerun()
+        return
+
+    for col in ["employee_no", "name", "organization"]:
+        if col not in candidates.columns:
+            candidates[col] = ""
+    show_df = candidates[["employee_no", "name", "organization"]].copy()
+    show_df.columns = ["사번", "이름", "소속 기관"]
+
+    st.caption("사번, 이름, 소속 기관을 확인한 뒤 정확한 본인 정보를 선택하세요.")
+    st.dataframe(show_df, use_container_width=True, height=min(320, 90 + len(show_df) * 35))
+
+    exact_name = (name_query or "").strip()
+    exact_cnt = int((candidates["name"].astype(str).str.strip() == exact_name).sum()) if exact_name else 0
+    if exact_cnt >= 2:
+        st.warning(f"동명이인 {exact_cnt}명이 확인되었습니다. 반드시 사번을 확인해 선택해주세요.")
+
+    options = list(range(len(candidates)))
+    default_idx = 0
+    if st.session_state.get("employee_selected_record"):
+        sel = st.session_state.get("employee_selected_record") or {}
+        for i, row in candidates.iterrows():
+            if str(row.get("employee_no", "")).strip() == str(sel.get("employee_no", "")).strip() and str(row.get("name", "")).strip() == str(sel.get("name", "")).strip():
+                default_idx = int(i)
+                break
+
+    selected_idx = st.selectbox(
+        "본인 정보 선택",
+        options=options,
+        index=default_idx if options else 0,
+        format_func=lambda i: _employee_candidate_label(candidates.iloc[int(i)].to_dict()),
+        key="employee_candidate_select_idx_modal",
+    )
+
+    preview = candidates.iloc[int(selected_idx)].to_dict()
+    p1, p2, p3 = st.columns(3)
+    p1.text_input("사번", value=str(preview.get("employee_no", "")), disabled=True, key="employee_modal_preview_no")
+    p2.text_input("이름", value=str(preview.get("name", "")), disabled=True, key="employee_modal_preview_name")
+    p3.text_input("소속 기관", value=str(preview.get("organization", "")), disabled=True, key="employee_modal_preview_org")
+
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("✅ 이 정보로 확인", key="employee_modal_confirm_btn", use_container_width=True):
+            row = candidates.iloc[int(selected_idx)].to_dict()
+            st.session_state.employee_selected_record = {
+                "employee_no": str(row.get("employee_no", "")).strip(),
+                "name": str(row.get("name", "")).strip(),
+                "organization": str(row.get("organization", "")).strip() or "미분류",
+            }
+            st.session_state.employee_lookup_modal_open = False
+            try:
+                st.toast("참가자 정보가 확인되었습니다.", icon="✅")
+            except Exception:
+                pass
+            st.rerun()
+    with c2:
+        if st.button("닫기", key="employee_modal_close_btn", use_container_width=True):
+            st.session_state.employee_lookup_modal_open = False
+            st.rerun()
+
+
+if hasattr(st, "dialog"):
+    @st.dialog("📋 직원 정보 확인")
+    def render_employee_lookup_popup(name_query: str = ""):
+        _render_employee_lookup_popup_body(name_query)
+else:
+    def render_employee_lookup_popup(name_query: str = ""):
+        st.markdown("### 📋 직원 정보 확인")
+        _render_employee_lookup_popup_body(name_query)
 
 
 def append_attempt_log(mission_key: str, q_idx: int, q_type: str, payload: dict):
@@ -881,9 +1074,10 @@ def append_attempt_log(mission_key: str, q_idx: int, q_type: str, payload: dict)
 
     row = _normalize_log_row({
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "employee_no": user.get("employee_no", ""),
         "name": user.get("name", ""),
         "organization": user.get("org", ""),
-        "department": user.get("dept", ""),
+        "department": "",
         "mission_key": mission_key,
         "mission_title": mission["title"],
         "question_index": q_idx + 1,
@@ -1003,6 +1197,10 @@ def _build_participant_snapshot(df: pd.DataFrame):
             df["organization"] = "미분류"
     df["organization"] = df["organization"].fillna("").astype(str).str.strip().replace("", "미분류")
 
+    if "employee_no" not in df.columns:
+        df["employee_no"] = ""
+    df["employee_no"] = df["employee_no"].fillna("").astype(str).str.strip()
+
     if "name" not in df.columns:
         df["name"] = "이름미상"
     df["name"] = df["name"].fillna("").astype(str).str.strip().replace("", "이름미상")
@@ -1031,7 +1229,7 @@ def _build_participant_snapshot(df: pd.DataFrame):
         # question_code 기반으로 복원 시도
         df["mission_key"] = df["question_code"].astype(str).str.split("_Q").str[0]
 
-    df["learner_id"] = df["organization"] + "|" + df["name"]
+    df["learner_id"] = df["employee_no"].where(df["employee_no"].str.strip() != "", df["organization"] + "|" + df["name"])
 
     # 최신 제출 기준 문항 스냅샷(문항별 중복 제거)
     df_sorted = df.sort_values(["timestamp"], ascending=True)
@@ -1043,7 +1241,7 @@ def _build_participant_snapshot(df: pd.DataFrame):
 
     # 참여자별 기본 집계
     attempts_by_user = (
-        df.groupby(["learner_id", "organization", "name"], as_index=False)
+        df.groupby(["learner_id", "employee_no", "organization", "name"], as_index=False)
           .agg(
               total_attempts=("question_code", "count"),
               last_activity=("timestamp", "max"),
@@ -1246,7 +1444,9 @@ def render_org_dashboard(compact: bool = False):
     if selected_org != "전체":
         p_view = p_view[p_view["organization"] == selected_org]
 
+    p_view["employee_no"] = p_view.get("employee_no", "").fillna("").astype(str).replace("", "-")
     p_view = p_view.rename(columns={
+        "employee_no": "사번",
         "organization": "기관",
         "name": "이름",
         "status": "상태",
@@ -1258,7 +1458,7 @@ def render_org_dashboard(compact: bool = False):
         "total_attempts": "누적 제출 수",
         "last_activity": "최근 참여",
     })
-    show_cols = ["기관", "이름", "상태", "총점", "점수율(%)", "완료 테마수", "제출 문항수", "문항 진행률(%)", "누적 제출 수", "최근 참여"]
+    show_cols = ["사번", "기관", "이름", "상태", "총점", "점수율(%)", "완료 테마수", "제출 문항수", "문항 진행률(%)", "누적 제출 수", "최근 참여"]
     st.dataframe(p_view[show_cols], use_container_width=True)
 
     csv_bytes = p_view[show_cols].to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
@@ -1367,9 +1567,10 @@ def render_admin_question_stats():
 
     df["is_correct_norm"] = df.apply(_is_correct_norm, axis=1)
 
+    emp_series = df["employee_no"].astype(str).fillna("") if "employee_no" in df.columns else pd.Series([""] * len(df))
     name_series = df["name"].astype(str) if "name" in df.columns else pd.Series([""] * len(df))
     org_series = df["organization"].astype(str) if "organization" in df.columns else pd.Series([""] * len(df))
-    df["learner_key"] = name_series + "|" + org_series
+    df["learner_key"] = emp_series.where(emp_series.str.strip() != "", name_series + "|" + org_series)
 
     qidx_src = df["question_index"] if "question_index" in df.columns else pd.Series([0]*len(df))
     if isinstance(qidx_src, pd.DataFrame):
@@ -1551,7 +1752,6 @@ def render_guardian_map():
 def render_briefing(m_key: str):
     mission = SCENARIOS[m_key]
     brief = mission["briefing"]
-    user_dept = st.session_state.user_info.get("dept", "")
 
     st.markdown(
         f"<div class='mission-header'><div style='font-size:1.1rem; font-weight:800;'>{mission['title']} · 브리핑</div></div>",
@@ -1595,8 +1795,6 @@ def render_briefing(m_key: str):
             unsafe_allow_html=True,
         )
 
-    if user_dept:
-        st.info(f"부서 포인트 ({user_dept}) · {DEPT_GUIDE.get(user_dept, '기본 준법 원칙을 확인하세요.')}")
 
     c1, c2 = st.columns(2)
     with c1:
@@ -1877,31 +2075,90 @@ if st.session_state.stage == "intro":
         render_org_dashboard(compact=True)
     st.caption("상세 통계는 좌측 사이드바의 ‘관리자 대시보드’에서 확인할 수 있습니다.")
 
-    name = st.text_input("성함")
-    org = st.selectbox("소속 기관", ORG_OPTIONS)
-    dept = st.selectbox("직무/부서 (학습 포인트용)", ["영업팀", "구매팀", "인사팀", "IT지원팀", "감사팀"])
+    emp_df, emp_meta_msg = load_employee_master_df()
 
-    if st.button("모험 시작하기", use_container_width=True):
-        if name.strip():
-            st.session_state.user_info = {"name": name.strip(), "org": org, "dept": dept}
-            st.session_state.stage = "map"
-            st.rerun()
+    st.markdown("### 👤 참가자 확인")
+    st.caption("사전에 업로드한 직원 명단을 기준으로 성명을 조회하고, 사번/소속기관을 확인한 뒤 시작합니다.")
+
+    if emp_meta_msg:
+        st.info(emp_meta_msg)
+
+    name_query = st.text_input("성함 입력 (사번 조회)", key="intro_name_query", placeholder="예: 홍길동")
+    c_lookup1, c_lookup2 = st.columns([2, 1])
+    with c_lookup1:
+        lookup_clicked = st.button("🔎 성명 조회", use_container_width=True)
+    with c_lookup2:
+        clear_clicked = st.button("초기화", use_container_width=True)
+
+    if clear_clicked:
+        st.session_state.employee_lookup_candidates = []
+        st.session_state.employee_selected_record = None
+        st.session_state.employee_lookup_modal_open = False
+        st.rerun()
+
+    if lookup_clicked:
+        q = (name_query or "").strip()
+        st.session_state.employee_selected_record = None
+        st.session_state.employee_lookup_modal_open = False
+        if not q:
+            st.warning("성함을 입력한 뒤 조회해주세요.")
+        elif emp_df is None or emp_df.empty:
+            st.warning("직원 명단 파일을 찾지 못했습니다. app.py와 같은 폴더에 직원 명단 파일(csv/xlsx)을 넣어주세요.")
         else:
-            st.warning("성함을 입력해주세요. (공백만 입력 불가)")
+            exact = emp_df[emp_df["name"].astype(str).str.strip() == q].copy()
+            partial = emp_df[emp_df["name"].astype(str).str.contains(q, case=False, na=False)].copy()
+            candidates = exact if not exact.empty else partial
+            st.session_state.employee_lookup_candidates = candidates.to_dict("records")
+            if candidates.empty:
+                st.warning("일치하는 성명이 없습니다. 성함을 다시 확인해주세요.")
+            else:
+                st.success(f"조회 결과 {len(candidates)}건 · 팝업에서 본인 정보를 확인해주세요.")
+                st.session_state.employee_lookup_modal_open = True
+
+    if st.session_state.get("employee_lookup_modal_open", False):
+        render_employee_lookup_popup(name_query)
+    elif st.session_state.get("employee_lookup_candidates"):
+        st.caption("최근 조회 결과가 있습니다. 다시 확인하려면 아래 버튼을 누르세요.")
+        if st.button("📋 조회 결과 팝업 다시 열기", use_container_width=True, key="reopen_employee_popup"):
+            st.session_state.employee_lookup_modal_open = True
+            st.rerun()
+
+    selected_emp = st.session_state.get("employee_selected_record")
+    if selected_emp:
+        st.markdown("### ✅ 확인된 참가자 정보")
+        col_a, col_b, col_c = st.columns(3)
+        with col_a:
+            st.text_input("사번", value=selected_emp.get("employee_no", ""), disabled=True, key="confirm_emp_no")
+        with col_b:
+            st.text_input("이름", value=selected_emp.get("name", ""), disabled=True, key="confirm_emp_name")
+        with col_c:
+            st.text_input("소속 기관", value=selected_emp.get("organization", ""), disabled=True, key="confirm_emp_org")
+
+        if st.button("모험 시작하기", use_container_width=True):
+            if selected_emp.get("name"):
+                st.session_state.user_info = {
+                    "employee_no": selected_emp.get("employee_no", ""),
+                    "name": selected_emp.get("name", ""),
+                    "org": selected_emp.get("organization", ""),
+                }
+                st.session_state.stage = "map"
+                st.rerun()
+            else:
+                st.warning("참가자 확인 정보를 다시 선택해주세요.")
 
 elif st.session_state.stage == "map":
     user_name = st.session_state.user_info.get("name", "가디언")
     user_org = st.session_state.user_info.get("org", "")
-    user_dept = st.session_state.user_info.get("dept", "")
 
     st.title(f"🗺️ {user_name} 가디언의 지도")
     if st.session_state.get("audio_debug"):
         render_audio_status_hint()
     cap_parts = []
+    user_emp_no = st.session_state.user_info.get("employee_no", "")
+    if user_emp_no:
+        cap_parts.append(f"사번: {user_emp_no}")
     if user_org:
         cap_parts.append(f"소속 기관: {user_org}")
-    if user_dept:
-        cap_parts.append(f"부서 포인트 · {DEPT_GUIDE.get(user_dept, '')}")
     if cap_parts:
         st.caption(" | ".join(cap_parts))
 
@@ -1980,7 +2237,6 @@ elif st.session_state.stage == "admin":
 elif st.session_state.stage == "ending":
     user_name = st.session_state.user_info.get("name", "가디언")
     user_org = st.session_state.user_info.get("org", "")
-    user_dept = st.session_state.user_info.get("dept", "")
     score = st.session_state.score
     grade = get_grade(score, TOTAL_SCORE)
 
@@ -2001,7 +2257,7 @@ elif st.session_state.stage == "ending":
             f"""
             <div class='card'>
               <div class='card-title'>최종 결과</div>
-              <div>소속 기관: <b>{user_org or "-"}</b></div><div>직무/부서: <b>{user_dept or "-"}</b></div>
+              <div>소속 기관: <b>{user_org or "-"}</b></div><div>사번: <b>{st.session_state.user_info.get("employee_no","-") or "-"}</b></div>
               <div>총점: <b>{score} / {TOTAL_SCORE}</b></div>
               <div>등급: <b>{grade}</b></div>
             </div>
