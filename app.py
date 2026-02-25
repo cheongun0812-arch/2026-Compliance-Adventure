@@ -6,6 +6,10 @@ import io
 import time
 import base64
 import pandas as pd
+try:
+    from streamlit.errors import StreamlitInvalidHeightError
+except Exception:
+    StreamlitInvalidHeightError = Exception
 import streamlit.components.v1 as components
 import os
 import re
@@ -162,6 +166,105 @@ div.stButton > button:first-child:hover {
 
 </style>
 """, unsafe_allow_html=True)
+
+
+
+# =========================================================
+# 공통 안전 UI 래퍼 (버전 차이/빈 데이터 방어)
+# =========================================================
+def safe_dataframe(data, **kwargs):
+    """
+    Streamlit 버전 차이(특히 height=None)로 인한 예외를 방지하는 래퍼.
+    - height=None이면 height 인자를 아예 전달하지 않음
+    - 잘못된 높이값이면 자동 보정
+    - 데이터가 None이면 빈 안내 표시
+    """
+    if data is None:
+        st.info("표시할 데이터가 없습니다.")
+        return
+
+    local_kwargs = dict(kwargs)
+    height = local_kwargs.pop("height", "__MISSING__")
+
+    # DataFrame 이외 입력도 허용 (list/dict 등)
+    df_obj = data
+    try:
+        if isinstance(data, pd.DataFrame):
+            df_obj = data
+        else:
+            df_obj = pd.DataFrame(data)
+    except Exception:
+        df_obj = data
+
+    try:
+        if height == "__MISSING__" or height is None:
+            return st.dataframe(df_obj, **local_kwargs)
+        # Streamlit 일부 버전은 int/"auto"만 허용
+        if isinstance(height, (int, float)):
+            height = int(height)
+            if height < 1:
+                height = 1
+            return st.dataframe(df_obj, height=height, **local_kwargs)
+        if isinstance(height, str) and height.lower() == "auto":
+            return st.dataframe(df_obj, height="auto", **local_kwargs)
+        # 그 외 값은 생략
+        return st.dataframe(df_obj, **local_kwargs)
+    except StreamlitInvalidHeightError:
+        # height 문제면 height를 제거하고 재시도
+        try:
+            return st.dataframe(df_obj, **local_kwargs)
+        except Exception:
+            # 마지막 fallback
+            if isinstance(df_obj, pd.DataFrame):
+                st.write(df_obj)
+            else:
+                st.write(data)
+    except Exception:
+        if isinstance(df_obj, pd.DataFrame):
+            st.write(df_obj)
+        else:
+            st.write(data)
+
+
+def safe_bar_chart(data, **kwargs):
+    """
+    차트 데이터가 비어 있거나 숫자형 컬럼이 없을 때 앱이 죽지 않도록 방어.
+    """
+    if data is None:
+        st.info("차트 데이터가 없습니다.")
+        return
+    try:
+        chart_df = data.copy() if isinstance(data, pd.DataFrame) else pd.DataFrame(data)
+    except Exception:
+        st.info("차트 데이터를 불러오지 못했습니다.")
+        return
+
+    if chart_df is None or len(chart_df) == 0:
+        st.info("차트 데이터가 없습니다.")
+        return
+
+    # 숫자형 컬럼만 사용
+    try:
+        numeric_cols = chart_df.select_dtypes(include="number").columns.tolist()
+        if not numeric_cols:
+            # 숫자형 변환 시도
+            for c in chart_df.columns:
+                chart_df[c] = pd.to_numeric(chart_df[c], errors="ignore")
+            numeric_cols = chart_df.select_dtypes(include="number").columns.tolist()
+        if not numeric_cols:
+            st.info("차트로 표시할 숫자형 데이터가 없습니다.")
+            return
+        chart_df = chart_df[numeric_cols]
+    except Exception:
+        pass
+
+    try:
+        st.bar_chart(chart_df, **kwargs)
+    except Exception:
+        # 마지막 fallback: 원본 표로 표시
+        st.info("차트를 표시하지 못해 표로 대신 보여드립니다.")
+        safe_dataframe(chart_df, use_container_width=True)
+
 
 # =========================================================
 # 2) 파일 경로 / 에셋
@@ -642,7 +745,7 @@ def render_audio_status_hint():
             rows.append({"구분": f"BGM · {k}", "파일명": v.name, "존재": "✅" if v.exists() else "❌"})
         for k, v in SFX.items():
             rows.append({"구분": f"SFX · {k}", "파일명": v.name, "존재": "✅" if v.exists() else "❌"})
-        st.dataframe(pd.DataFrame(rows), use_container_width=True)
+        safe_dataframe(pd.DataFrame(rows), use_container_width=True)
         st.caption("※ 브라우저 자동재생 정책에 따라 첫 클릭(모험 시작/버튼 클릭) 이후에 사운드가 재생되는 경우가 있습니다.")
         c1, c2 = st.columns(2)
         with c1:
@@ -1087,7 +1190,7 @@ def _render_employee_lookup_popup_body(name_query: str = ""):
     show_df.columns = ["사번", "이름", "소속 기관"]
 
     st.caption("사번, 이름, 소속 기관을 확인한 뒤 정확한 본인 정보를 선택하세요.")
-    st.dataframe(show_df, use_container_width=True, height=min(320, 90 + len(show_df) * 35))
+    safe_dataframe(show_df, use_container_width=True, height=min(320, 90 + len(show_df) * 35))
 
     exact_name = (name_query or "").strip()
     exact_cnt = int((candidates["name"].astype(str).str.strip() == exact_name).sum()) if exact_name else 0
@@ -1504,10 +1607,10 @@ def render_org_dashboard(compact: bool = False):
                 "total_attempts": "누적 제출 수",
                 "latest_activity": "최근 참여",
             })
-            st.dataframe(org_view, use_container_width=True, height=280 if compact else None)
+            safe_dataframe(org_view, use_container_width=True, height=280 if compact else None)
 
             chart_df = org_view[["기관", "평균 점수율(%)"]].set_index("기관")
-            st.bar_chart(chart_df)
+            safe_bar_chart(chart_df)
         else:
             st.info("기관 집계 데이터가 없습니다.")
 
@@ -1540,7 +1643,7 @@ def render_org_dashboard(compact: bool = False):
         "last_activity": "최근 참여",
     })
     show_cols = ["사번", "기관", "이름", "상태", "총점", "점수율(%)", "완료 테마수", "제출 문항수", "문항 진행률(%)", "누적 제출 수", "최근 참여"]
-    st.dataframe(p_view[show_cols], use_container_width=True)
+    safe_dataframe(p_view[show_cols], use_container_width=True)
 
     csv_bytes = p_view[show_cols].to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
     st.download_button(
@@ -1604,8 +1707,8 @@ def render_admin_page():
                     st.write("기관별 로그 건수")
                     cnt = df["organization"].fillna("미분류").value_counts().reset_index()
                     cnt.columns = ["기관", "로그 건수"]
-                    st.dataframe(cnt, use_container_width=True)
-                st.dataframe(df.tail(200), use_container_width=True, height=320)
+                    safe_dataframe(cnt, use_container_width=True)
+                safe_dataframe(df.tail(200), use_container_width=True, height=320)
                 st.download_button(
                     "📥 전체 로그 CSV 다운로드",
                     data=df.to_csv(index=False).encode("utf-8-sig"),
@@ -1722,10 +1825,10 @@ def render_admin_question_stats():
     }
     view_df = stats[view_cols].rename(columns=rename_map)
 
-    st.dataframe(view_df, use_container_width=True)
+    safe_dataframe(view_df, use_container_width=True)
     if not view_df.empty:
         chart_df = view_df[["문항", "첫 시도 정답률(%)"]].copy().set_index("문항")
-        st.bar_chart(chart_df)
+        safe_bar_chart(chart_df)
 
     st.caption(
         f"※ 주관식은 점수율 {int(TEXT_CORRECT_THRESHOLD*100)}% 이상을 '정답'으로 집계합니다. "
