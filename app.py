@@ -543,6 +543,10 @@ MAP_STAGE_IMAGES = {
 }
 DEFAULT_MAP_IMAGE = ASSET_DIR / "world_map.png"  # 선택 (fallback)
 MASTER_IMAGE = ASSET_DIR / "master.png"
+ENDING_IMAGE_CANDIDATE_NAMES = [
+    "ending_final.png", "final_stage.png", "ending.png", "final.png",
+    "completion_final.png", "guardian_final.png"
+]
 
 # --- 관리자 통계/채점 기준 ---
 TEXT_CORRECT_THRESHOLD = 0.7  # 주관식 점수율 70% 이상이면 '정답'으로 집계
@@ -756,8 +760,17 @@ SCENARIOS = {'subcontracting': {'title': '🚜 하도급의 계곡',
                                              '거절 표현': ['어렵', '불가', '제공', '거절', '안내'],
                                              '대안 제시': ['문의', '채널', '접수', '회신', '공개']}}]}}
 
-THEME_TOTAL_SCORE = 100
-TOTAL_SCORE = len(SCENARIO_ORDER) * THEME_TOTAL_SCORE
+MCQ_SCORE = 10
+TEXT_SCORE = 10
+PARTICIPATION_SCORE = 10
+
+# 모든 테마에 동일 배점 적용 (객관식 10점 × 6문항, 주관식 10점 × 3문항)
+for _m in SCENARIOS.values():
+    for _q in _m.get("quiz", []):
+        _q["score"] = MCQ_SCORE if _q.get("type") == "mcq" else TEXT_SCORE
+
+THEME_TOTAL_SCORE = sum(q.get("score", 0) for q in SCENARIOS[SCENARIO_ORDER[0]]["quiz"]) if SCENARIO_ORDER else 0
+TOTAL_SCORE = sum(sum(q.get("score", 0) for q in SCENARIOS[m]["quiz"]) for m in SCENARIO_ORDER) + PARTICIPATION_SCORE
 
 # =========================================================
 # 4) 상태 관리
@@ -770,6 +783,8 @@ def init_state():
         "completed": [],
         "mission_scores": {},
         "score": 0,
+        "participation_awarded": False,
+        "participation_score": 0,
         "quiz_progress": {},
         "attempt_counts": {},
         "attempt_history": [],
@@ -791,7 +806,19 @@ def init_state():
 
 
 def recalc_total_score():
-    st.session_state.score = sum(st.session_state.mission_scores.values())
+    theme_sum = int(sum(st.session_state.mission_scores.values()))
+    st.session_state.score = theme_sum + int(st.session_state.get("participation_score", 0) or 0)
+
+
+def theme_max_score(m_key: str) -> int:
+    return int(sum(q.get("score", 0) for q in SCENARIOS.get(m_key, {}).get("quiz", [])))
+
+
+def award_participation_points_if_needed():
+    if not st.session_state.get("participation_awarded", False):
+        st.session_state.participation_awarded = True
+        st.session_state.participation_score = PARTICIPATION_SCORE
+    recalc_total_score()
 
 
 def ensure_quiz_progress(m_key: str):
@@ -875,6 +902,14 @@ def get_current_map_image():
         return path
     if DEFAULT_MAP_IMAGE.exists():
         return DEFAULT_MAP_IMAGE
+    return None
+
+
+def get_ending_image():
+    for name in ENDING_IMAGE_CANDIDATE_NAMES:
+        p = ASSET_DIR / name
+        if p.exists():
+            return p
     return None
 
 
@@ -1698,7 +1733,7 @@ def _build_participant_snapshot(df: pd.DataFrame):
     )
 
     participants = attempts_by_user.merge(score_by_user, on="learner_id", how="left").merge(completed_theme_cnt, on="learner_id", how="left")
-    participants["total_score"] = participants["total_score"].fillna(0).astype(int)
+    participants["total_score"] = participants["total_score"].fillna(0).astype(int) + PARTICIPATION_SCORE
     participants["answered_questions"] = participants["answered_questions"].fillna(0).astype(int)
     participants["completed_themes"] = participants["completed_themes"].fillna(0).astype(int)
     participants["completion_rate_q"] = ((participants["answered_questions"] / max(total_questions, 1)) * 100).round(1)
@@ -1747,8 +1782,10 @@ def _build_participant_snapshot(df: pd.DataFrame):
 
 
 
+
 def render_intro_org_cumulative_board():
-    st.markdown("### 🏢 기관별 누적 점수 현황")
+    """메인 화면 전용: 기관별 누적 점수/참여 현황 대시보드 (참여자용 요약 뷰)."""
+    st.markdown("### 🏢 Cumulative score and participation status by institution")
 
     df, err = _load_log_df()
     if err:
@@ -1762,46 +1799,211 @@ def render_intro_org_cumulative_board():
             st.info("표시할 누적 점수 데이터가 없습니다.")
             return
 
-        # 참여자별 최신 점수 합계를 기준으로 기관 누적 점수 계산
+        # 참여자 최신 점수 기준 집계
         org_score = (
             participants.groupby("organization", as_index=False)
             .agg(
                 cumulative_score=("total_score", "sum"),
-                participants=("learner_id", "nunique"),
+                participant_count=("learner_id", "nunique"),
                 avg_score=("total_score", "mean"),
             )
-            .sort_values(["cumulative_score", "participants"], ascending=[False, False])
-            .reset_index(drop=True)
+        )
+        org_score["organization"] = org_score["organization"].fillna("미분류").astype(str)
+
+        # 직원명단 기반 전체 인원(분모) 집계 -> 참여율 계산
+        emp_df, _ = load_employee_master_df()
+        if emp_df is not None and not emp_df.empty:
+            emp_base = emp_df.copy()
+            emp_base["organization"] = emp_base["organization"].fillna("미분류").astype(str)
+            # 사번이 비어있는 경우를 대비해 이름 기준으로 대체 식별
+            emp_base["_emp_key"] = emp_base["employee_no"].astype(str).str.strip()
+            emp_base.loc[emp_base["_emp_key"] == "", "_emp_key"] = emp_base["name"].astype(str).str.strip()
+            org_base = (
+                emp_base.groupby("organization", as_index=False)
+                .agg(total_employees=("_emp_key", "nunique"))
+            )
+        else:
+            org_base = pd.DataFrame(columns=["organization", "total_employees"])
+
+        merged = org_base.merge(org_score, on="organization", how="outer")
+        for col in ["total_employees", "cumulative_score", "participant_count", "avg_score"]:
+            if col not in merged.columns:
+                merged[col] = 0
+        merged["total_employees"] = pd.to_numeric(merged["total_employees"], errors="coerce").fillna(0).astype(int)
+        merged["cumulative_score"] = pd.to_numeric(merged["cumulative_score"], errors="coerce").fillna(0.0)
+        merged["participant_count"] = pd.to_numeric(merged["participant_count"], errors="coerce").fillna(0).astype(int)
+        merged["avg_score"] = pd.to_numeric(merged["avg_score"], errors="coerce").fillna(0.0)
+
+        merged["participation_rate"] = np.where(
+            merged["total_employees"] > 0,
+            (merged["participant_count"] / merged["total_employees"] * 100.0),
+            np.nan,
         )
 
-        if org_score.empty:
+        merged = merged.sort_values(
+            ["cumulative_score", "avg_score", "participant_count", "organization"],
+            ascending=[False, False, False, True],
+        ).reset_index(drop=True)
+        merged["rank"] = np.arange(1, len(merged) + 1)
+
+        if merged.empty:
             st.info("기관별 누적 점수 데이터가 없습니다.")
             return
 
-        # 메인 화면에는 누적 점수 중심으로만 간단히 노출
-        cards = []
-        for _, row in org_score.iterrows():
-            org_name = str(row.get("organization", "미분류"))
+        # 시각 강조용 HTML 테이블
+        st.markdown(
+            """
+            <style>
+            .intro-org-board-wrap{
+              background: linear-gradient(180deg, rgba(12,20,38,.95), rgba(10,15,28,.96));
+              border:1px solid rgba(71,106,178,.35);
+              border-radius:16px;
+              padding:14px 14px 10px 14px;
+              box-shadow: 0 8px 24px rgba(0,0,0,.28);
+              margin-bottom: 8px;
+            }
+            .intro-org-board-sub{
+              color:#BFD2FF; font-size:.86rem; margin-top:-2px; margin-bottom:10px; opacity:.95;
+            }
+            .intro-org-table{
+              width:100%;
+              border-collapse: separate;
+              border-spacing:0 6px;
+              table-layout: fixed;
+            }
+            .intro-org-table thead th{
+              text-align:left;
+              font-size:.86rem;
+              color:#DDE8FF;
+              background: rgba(62,90,152,.30);
+              border-top:1px solid rgba(120,150,220,.22);
+              border-bottom:1px solid rgba(120,150,220,.16);
+              padding:9px 10px;
+            }
+            .intro-org-table thead th:first-child{border-radius:10px 0 0 10px;}
+            .intro-org-table thead th:last-child{border-radius:0 10px 10px 0;}
+            .intro-org-table tbody td{
+              padding:10px 10px;
+              background: rgba(19,28,50,.92);
+              border-top:1px solid rgba(114,145,214,.16);
+              border-bottom:1px solid rgba(114,145,214,.10);
+              color:#F4F8FF;
+              font-size:.92rem;
+              vertical-align: middle;
+            }
+            .intro-org-table tbody tr td:first-child{
+              border-radius:12px 0 0 12px;
+              width:68px;
+              font-weight:700;
+            }
+            .intro-org-table tbody tr td:last-child{border-radius:0 12px 12px 0;}
+            .org-rank-badge{
+              display:inline-flex; align-items:center; justify-content:center;
+              min-width:34px; height:28px; border-radius:999px;
+              font-weight:800; font-size:.86rem;
+              border:1px solid rgba(255,255,255,.18);
+              background: rgba(255,255,255,.06);
+              color:#EAF1FF;
+            }
+            .org-rank-top1{ background: linear-gradient(135deg,#7A5A00,#D9B342); color:#FFF8DA; border-color:#E8CF75; }
+            .org-rank-top2{ background: linear-gradient(135deg,#4B5563,#AEB7C2); color:#F5F7FA; border-color:#C9D0D8; }
+            .org-rank-top3{ background: linear-gradient(135deg,#5D3D1E,#C9853A); color:#FFF1DF; border-color:#E3AE72; }
+            .org-name-cell{font-weight:700; color:#FFFFFF; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+            .org-num-strong{font-weight:800; color:#79F2B0;}
+            .org-subtle{color:#C5D5FB; font-size:.82rem;}
+            .org-rate-wrap{
+              display:flex; align-items:center; gap:8px;
+            }
+            .org-rate-bar{
+              flex:1; min-width:110px; height:10px; border-radius:999px;
+              background: rgba(255,255,255,.08);
+              overflow:hidden; border:1px solid rgba(255,255,255,.06);
+            }
+            .org-rate-fill{
+              height:100%;
+              background: linear-gradient(90deg, #2BD676, #83F1FF);
+              box-shadow: 0 0 12px rgba(43,214,118,.35);
+            }
+            .org-rate-text{min-width:48px; text-align:right; font-weight:700; color:#EFFFF7; font-size:.86rem;}
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        rows_html = []
+        for _, row in merged.iterrows():
+            rank = int(row.get("rank", 0) or 0)
+            org_name = html.escape(str(row.get("organization", "미분류")))
             cum = int(round(float(row.get("cumulative_score", 0) or 0)))
-            ppl = int(row.get("participants", 0) or 0)
-            avg = float(row.get("avg_score", 0) or 0)
-            cards.append(
+            avg = float(row.get("avg_score", 0) or 0.0)
+            p_cnt = int(row.get("participant_count", 0) or 0)
+            total_emp = int(row.get("total_employees", 0) or 0)
+            rate = row.get("participation_rate", np.nan)
+            has_rate = pd.notna(rate)
+            rate_val = float(rate) if has_rate else 0.0
+            rate_pct = max(0.0, min(100.0, rate_val))
+            rank_cls = "org-rank-badge"
+            if rank == 1:
+                rank_cls += " org-rank-top1"
+            elif rank == 2:
+                rank_cls += " org-rank-top2"
+            elif rank == 3:
+                rank_cls += " org-rank-top3"
+            if rank <= 3:
+                rank_label = {1: "🥇1", 2: "🥈2", 3: "🥉3"}[rank]
+            else:
+                rank_label = str(rank)
+
+            participant_label = f"{p_cnt}명"
+            if total_emp > 0:
+                participant_label = f"{p_cnt} / {total_emp}명"
+
+            rate_display = f"{rate_val:.1f}%" if has_rate else "-"
+
+            rows_html.append(
                 f"""
-                <div class='org-mini-card'>
-                  <div class='org-mini-title'>{org_name}</div>
-                  <div class='org-mini-score'>{cum}점</div>
-                  <div class='org-mini-meta'>참여 {ppl}명 · 평균 {avg:.1f}점</div>
-                </div>
+                <tr>
+                  <td><span class="{rank_cls}">{rank_label}</span></td>
+                  <td class="org-name-cell" title="{org_name}">{org_name}</td>
+                  <td><span class="org-num-strong">{cum:,}점</span></td>
+                  <td>{avg:.1f}점</td>
+                  <td>{participant_label}<div class="org-subtle">참여자수</div></td>
+                  <td>
+                    <div class="org-rate-wrap">
+                      <div class="org-rate-bar"><div class="org-rate-fill" style="width:{rate_pct:.1f}%;"></div></div>
+                      <div class="org-rate-text">{rate_display}</div>
+                    </div>
+                  </td>
+                </tr>
                 """
             )
 
         st.markdown(
-            "<div class='org-mini-grid'>" + "".join(cards) + "</div>",
+            f"""
+            <div class="intro-org-board-wrap">
+              <div class="intro-org-board-sub">메인 화면에서는 기관별 누적 현황 요약만 표시됩니다. 상세 로그/통계는 관리자 대시보드에서 확인하세요.</div>
+              <table class="intro-org-table">
+                <thead>
+                  <tr>
+                    <th style="width:68px;">순위</th>
+                    <th>기관명</th>
+                    <th style="width:140px;">누적 점수</th>
+                    <th style="width:140px;">참가자 평균점수</th>
+                    <th style="width:150px;">참여자 수</th>
+                    <th style="width:220px;">참여율</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {''.join(rows_html)}
+                </tbody>
+              </table>
+            </div>
+            """,
             unsafe_allow_html=True,
         )
 
     except Exception as e:
-        st.info(f"기관별 누적 점수 표시 중 오류가 발생했습니다: {e}")
+        st.info(f"기관별 누적 현황 표시 중 오류가 발생했습니다: {e}")
 
 
 def render_admin_password_gate():
@@ -2154,12 +2356,26 @@ def render_conquer_fx_if_needed():
     theme_icon = THEME_ICONS.get(m_key, "🏳️")
     cleared_cnt = len(st.session_state.get("completed", []))
 
+    total_themes = len(SCENARIO_ORDER)
+    is_final_clear = cleared_cnt >= total_themes
+
+    # 최종 테마 정복 직후에는 상단 연출 배너/맵 재노출을 생략 (엔딩 화면 집중)
+    if is_final_clear:
+        play_sfx_now("conquer")
+        try:
+            st.toast(f"{theme_icon} 최종 정복 완료!", icon="🏁")
+        except Exception:
+            pass
+        st.session_state.show_conquer_fx = False
+        return
+
     fx_box = st.empty()
     fx_progress = st.progress(0)
+    final_msg = f"✨ {title} 정복 완료! 가디언 훈련 최종 단계가 완료되었습니다." if is_final_clear else f"✨ {title} 정복 완료!"
     fx_steps = [
         "🗺️ Guardian’s Map 갱신 중...",
         f"⚔️ {title} 정복 기록 반영...",
-        f"✨ {title} 정복 완료! 새로운 단계가 열립니다.",
+        final_msg,
     ]
 
     for i, msg in enumerate(fx_steps, start=1):
@@ -2190,7 +2406,10 @@ def render_conquer_fx_if_needed():
 
     st.success(f"{theme_icon} {title} 정복 완료!")
     try:
-        st.toast(f"{theme_icon} 새 구역이 해방되었습니다!", icon="✨")
+        if is_final_clear:
+            st.toast(f"{theme_icon} 최종 정복 완료!", icon="🏁")
+        else:
+            st.toast(f"{theme_icon} 새 구역이 해방되었습니다!", icon="✨")
     except Exception:
         pass
 
@@ -2221,7 +2440,7 @@ def render_guardian_map():
         if m_key in st.session_state.get("completed", []):
             txt = f"✅ {title}"
             if score is not None:
-                txt += f" ({score}/100)"
+                txt += f" ({score}/{theme_max_score(m_key)})"
         else:
             idx = SCENARIO_ORDER.index(m_key)
             if idx == 0 or SCENARIO_ORDER[idx - 1] in st.session_state.get("completed", []):
@@ -2415,8 +2634,26 @@ def render_text_question(m_key: str, q_idx: int, q_data: dict):
             unsafe_allow_html=True,
         )
 
-        with st.expander("모범답안 보기"):
-            st.write(q_data["model_answer"])
+        toggle_key = f"show_model_answer_{m_key}_{q_idx}"
+        if toggle_key not in st.session_state:
+            st.session_state[toggle_key] = False
+
+        c_ma_btn, c_ma_sp = st.columns([1.0, 2.0])
+        with c_ma_btn:
+            if st.button("모범답안 보기", key=f"btn_{toggle_key}", use_container_width=True):
+                st.session_state[toggle_key] = not st.session_state[toggle_key]
+
+        if st.session_state.get(toggle_key, False):
+            model_answer_text = html.escape(str(q_data.get("model_answer", ""))).replace('\n', '<br>')
+            st.markdown(
+                f"""
+                <div class='card'>
+                  <div class='card-title'>📘 모범답안</div>
+                  <div style='line-height:1.6; color:#F4F7FF;'>{model_answer_text}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
 
         c_edit, c_hint = st.columns([1.1, 1.9])
         with c_edit:
@@ -2552,7 +2789,7 @@ def render_quiz(m_key: str):
         f"""
         <div class='mission-header'>
           <div style='font-size:1.05rem; font-weight:800;'>{theme_icon} {mission['title']} · 퀴즈</div>
-          <div style='margin-top:4px; font-size:0.9rem; opacity:.92;'>문항 진행: {submitted_count} / {len(q_list)} · 테마 점수(누적): {current_theme_score}/100</div>
+          <div style='margin-top:4px; font-size:0.9rem; opacity:.92;'>문항 진행: {submitted_count} / {len(q_list)} · 테마 점수(누적): {current_theme_score}/{theme_max_score(m_key)}</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -2648,7 +2885,6 @@ if st.session_state.stage == "intro":
     )
 
     render_intro_org_cumulative_board()
-    st.caption("상세 통계는 좌측 사이드바의 ‘관리자 대시보드’에서 확인할 수 있습니다.")
 
     emp_df, emp_meta_msg = load_employee_master_df()
 
@@ -2717,6 +2953,7 @@ if st.session_state.stage == "intro":
                     "name": emp_name,
                     "org": emp_org,
                 }
+                award_participation_points_if_needed()
                 st.session_state.stage = "map"
                 st.rerun()
             else:
@@ -2748,9 +2985,11 @@ elif st.session_state.stage == "map":
         with cols[i]:
             if status == "clear":
                 score = st.session_state.mission_scores.get(m_key, 0)
-                badge = "🏅" if score >= 90 else ("✅" if score >= 70 else "📘")
+                _mx = max(theme_max_score(m_key), 1)
+                _rt = score / _mx
+                badge = "🏅" if _rt >= 0.9 else ("✅" if _rt >= 0.7 else "📘")
                 st.success(f"{badge} {mission['title']}")
-                st.caption(f"점수 {score}/100")
+                st.caption(f"점수 {score}/{theme_max_score(m_key)}")
             elif status == "open":
                 if st.button(f"{mission['title']} 진입", key=f"enter_{m_key}", use_container_width=True):
                     st.session_state.current_mission = m_key
@@ -2766,13 +3005,11 @@ elif st.session_state.stage == "map":
         <div class='card'>
           <div class='card-title'>🏆 현재 점수</div>
           <div><b>{st.session_state.score} / {TOTAL_SCORE}</b> · 등급 예상: {get_grade(st.session_state.score, TOTAL_SCORE)}</div>
+          <div style='font-size:0.88rem; opacity:.9;'>구성: 객관식 60점 + 주관식 30점 + 참여 10점</div>
         </div>
         """,
         unsafe_allow_html=True,
     )
-
-    with st.expander("🏢 기관별 누적 현황 (미리보기)", expanded=False):
-        render_org_dashboard(compact=True)
 
     if len(st.session_state.completed) == len(SCENARIO_ORDER):
         if st.button("최종 결과 보기", use_container_width=True):
@@ -2830,6 +3067,10 @@ elif st.session_state.stage == "ending":
     st.title("🏆 Guardian Training Complete")
     st.success(f"{user_name} 가디언님, 모든 테마를 정복했습니다!")
 
+    _ending_img = get_ending_image()
+    if _ending_img:
+        st.image(str(_ending_img), use_container_width=True)
+
     st.markdown("<div class='brief-actions-wrap'></div>", unsafe_allow_html=True)
     c1, c2 = st.columns([1, 1], gap='large')
     with c1:
@@ -2839,6 +3080,7 @@ elif st.session_state.stage == "ending":
               <div class='card-title'>최종 결과</div>
               <div>소속 기관: <b>{user_org or "-"}</b></div><div>사번: <b>{st.session_state.user_info.get("employee_no","-") or "-"}</b></div>
               <div>총점: <b>{score} / {TOTAL_SCORE}</b></div>
+              <div style='font-size:0.9rem; opacity:.9;'>객관식 60점 + 주관식 30점 + 참여 10점</div>
               <div>등급: <b>{grade}</b></div>
             </div>
             """,
@@ -2849,7 +3091,7 @@ elif st.session_state.stage == "ending":
         for m_key in SCENARIO_ORDER:
             t = SCENARIOS[m_key]["title"]
             s = st.session_state.mission_scores.get(m_key, 0)
-            theme_lines.append(f"<li>{t}: <b>{s}/100</b></li>")
+            theme_lines.append(f"<li>{t}: <b>{s}/{theme_max_score(m_key)}</b></li>")
         st.markdown(
             f"""
             <div class='card'>
