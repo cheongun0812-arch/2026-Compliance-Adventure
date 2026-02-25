@@ -587,6 +587,14 @@ EMPLOYEE_COL_ALIASES = {
     "organization": ["organization", "org", "department", "dept", "소속", "소속기관", "기관", "조직", "본부", "부서"],
 }
 
+# 전체 과정 공통 BGM (권장 파일명)
+GLOBAL_BGM_CANDIDATE_NAMES = [
+    "2026 Compliance Adventure_bgm.mp3",  # 사용자 지정 최종 파일명
+    "2026_Compliance_Adventure_bgm.mp3",
+    "bgm_main.mp3",
+]
+
+# 구버전 단계별 파일명도 fallback 지원 (기존 운영 호환)
 BGM = {
     "intro": BASE_DIR / "bgm_intro.mp3",
     "map": BASE_DIR / "bgm_map.mp3",
@@ -939,14 +947,46 @@ def show_map_with_fade(map_path: Path, caption: str = None):
 
 
 
+def resolve_bgm_path(bgm_key: str) -> Path | None:
+    # 1) 전체 공통 BGM 우선 사용
+    for name in GLOBAL_BGM_CANDIDATE_NAMES:
+        gp = BASE_DIR / name
+        if gp.exists():
+            return gp
+    # 2) 없으면 단계별 BGM fallback
+    p = BGM.get(bgm_key)
+    if p and p.exists():
+        return p
+    return None
+
+
 def _audio_component_html(audio_b64: str, *, loop: bool = False, hidden_label: str = "audio"):
     loop_attr = " loop" if loop else ""
     html = f"""
     <html>
-      <body style=\"margin:0; padding:0; background:transparent;\">
-        <audio id=\"{hidden_label}\" autoplay{loop_attr} style=\"display:none;\">
-          <source src=\"data:audio/mp3;base64,{audio_b64}\" type=\"audio/mpeg\">
+      <body style="margin:0; padding:0; background:transparent;">
+        <audio id="{hidden_label}" autoplay{loop_attr} playsinline webkit-playsinline preload="auto" style="display:none;">
+          <source src="data:audio/mp3;base64,{audio_b64}" type="audio/mpeg">
         </audio>
+        <script>
+          (function() {{
+            const a = document.getElementById("{hidden_label}");
+            if (!a) return;
+            a.volume = 0.65;
+            const tryPlay = () => {{
+              const p = a.play();
+              if (p && p.catch) p.catch(() => {{}});
+            }};
+            // 최초 진입 시 자동재생 시도
+            tryPlay();
+            setTimeout(tryPlay, 120);
+            setTimeout(tryPlay, 400);
+            // 브라우저 자동재생 제한 시 첫 사용자 상호작용에서 재시도
+            ["click", "keydown", "touchstart"].forEach((evt) => {{
+              document.addEventListener(evt, tryPlay, {{ once: false, passive: true }});
+            }});
+          }})();
+        </script>
       </body>
     </html>
     """
@@ -987,11 +1027,12 @@ def render_audio_system():
     # 1) Background music (loop)
     if st.session_state.get("bgm_enabled", True):
         bgm_key = _resolve_bgm_key()
-        bgm_path = BGM.get(bgm_key)
+        bgm_path = resolve_bgm_path(bgm_key)
         if bgm_path and bgm_path.exists():
             try:
                 bgm_b64 = base64.b64encode(bgm_path.read_bytes()).decode("utf-8")
-                _audio_component_html(bgm_b64, loop=True, hidden_label=f"bgm_{bgm_key}")
+                # 전체 공통 BGM 사용 시 stage 전환에도 끊김을 최소화하도록 고정 라벨 사용
+                _audio_component_html(bgm_b64, loop=True, hidden_label="bgm_global")
             except Exception:
                 pass
 
