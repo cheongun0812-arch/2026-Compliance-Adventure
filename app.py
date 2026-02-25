@@ -12,6 +12,10 @@ try:
     from streamlit.errors import StreamlitInvalidHeightError
 except Exception:
     StreamlitInvalidHeightError = Exception
+try:
+    from streamlit.errors import StreamlitAPIException
+except Exception:
+    StreamlitAPIException = Exception
 import streamlit.components.v1 as components
 import os
 import re
@@ -1970,12 +1974,11 @@ def _clear_retry_offer():
 def start_training_attempt_session(user_info: dict, attempt_round: int, *, skip_to_stage: str = "map"):
     user_info = dict(user_info or {})
     keep_keys = {
-        "admin_authed": st.session_state.get("admin_authed", False),
-        "bgm_enabled": st.session_state.get("bgm_enabled", True),
-        "audio_debug": st.session_state.get("audio_debug", False),
-        "employee_lookup_candidates": st.session_state.get("employee_lookup_candidates", []),
-        "employee_selected_record": st.session_state.get("employee_selected_record"),
-        "employee_lookup_modal_open": False,
+    "admin_authed": st.session_state.get("admin_authed", False),
+    # NOTE: bgm_enabled is controlled by a checkbox widget; do NOT set it here (StreamlitAPIException).
+    "employee_lookup_candidates": st.session_state.get("employee_lookup_candidates", []),
+    "employee_selected_record": st.session_state.get("employee_selected_record"),
+    "employee_lookup_modal_open": False,
     }
 
     st.session_state.user_info = {
@@ -2005,7 +2008,11 @@ def start_training_attempt_session(user_info: dict, attempt_round: int, *, skip_
     st.session_state.training_attempt_id = f"run-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8]}"
 
     for k, v in keep_keys.items():
-        st.session_state[k] = v
+        try:
+            st.session_state[k] = v
+        except StreamlitAPIException:
+            # Some keys may be bound to widgets already created in this run; skip to avoid crash.
+            pass
 
     award_participation_points_if_needed()
 
