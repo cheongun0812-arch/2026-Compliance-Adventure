@@ -8,6 +8,7 @@ import base64
 import pandas as pd
 import streamlit.components.v1 as components
 import os
+import re
 
 # =========================================================
 # 1) 페이지 설정 / 스타일
@@ -169,6 +170,12 @@ div.stButton > button:first-child:hover {
 BASE_DIR = Path(__file__).parent if "__file__" in globals() else Path.cwd()
 ASSET_DIR = BASE_DIR
 LOG_FILE = BASE_DIR / "compliance_training_log.csv"
+LOG_FIELDNAMES = [
+    "timestamp", "name", "organization", "department",
+    "mission_key", "mission_title", "question_index", "question_code",
+    "question_type", "question", "selected_or_text", "is_correct",
+    "awarded_score", "max_score", "attempt_no_for_mission"
+]
 
 MAP_STAGE_IMAGES = {
     0: ASSET_DIR / "world_map_0.png",
@@ -193,7 +200,7 @@ SFX = {
 THEME_ICONS = {
     "subcontracting": "🚜",
     "security": "🔐",
-    "fairtrade": "🛡️",
+    "fairtrade": "🏰",
 }
 
 
@@ -370,77 +377,78 @@ SCENARIOS = {
         ]
     },
     "fairtrade": {
-        "title": "🛡️ 반부패의 성",
-        "territory_name": "반부패의 성",
+        "title": "🏰 공정의 성",
+        "territory_name": "공정의 성",
         "briefing": {
-            "title": "반부패(재산상 이익) 기본 원칙 브리핑",
-            "summary": "업무 관련자에게 금품, 상품권, 편의 제공 등 재산상 이익을 받거나 요구하는 행위는 반부패 리스크가 큽니다. 애매한 경우에도 먼저 수수하지 말고 즉시 보고/상담하는 것이 안전합니다.",
+            "title": "공정거래 기본 원칙 브리핑",
+            "summary": "경쟁사와 가격·입찰·물량 등 경쟁정보를 맞추는 행위는 담합 리스크가 큽니다. 애매한 대화라도 즉시 선을 긋고 보고하는 것이 안전합니다.",
             "red_flags": [
-                "업무 협력사/이해관계자가 상품권·현금성 선물을 제안",
-                "‘작은 성의’라며 개인 계좌·개인 연락처로 전달 시도",
-                "승인/평가/계약 직전·직후에 금품 또는 편의 제공 제안"
+                "입찰가/제안조건 공유 제안",
+                "‘서로 손해보지 않게 맞추자’는 표현",
+                "경쟁사와 비공식 정보 교환"
             ],
             "checklist": [
-                "금품·상품권·현금성 이익은 원칙적으로 수수 금지",
-                "즉시 정중히 거절하고, 대화/정황을 기록",
-                "상급자·감사/준법 담당자에게 보고 및 상담"
+                "가격·입찰 관련 대화 즉시 중단",
+                "거절 의사 명확히 표현",
+                "내부 보고 및 기록 남기기"
             ],
-            "keywords": ["재산상 이익", "금품 수수 금지", "거절", "보고"]
+            "keywords": ["담합", "입찰가", "거절", "보고"]
         },
         "quiz": [
             {
                 "type": "mcq",
-                "question": "계약이 막 완료된 후 협력사 담당자가 감사의 의미라며 모바일 상품권을 보내왔습니다. 가장 적절한 대응은?",
+                "question": "경쟁사가 식사 자리에서 ‘이번 입찰가는 서로 맞추자’고 제안했습니다. 가장 적절한 대응은?",
                 "options": [
-                    "소액이므로 받는다",
-                    "개인적으로 받고 외부에 알리지 않는다",
-                    "정중히 거절하고 관련 사실을 내부에 보고한다",
-                    "이번만 받고 다음부터 조심한다"
+                    "이번만 비공식적으로 맞춰준다",
+                    "일단 듣기만 하고 나중에 생각한다",
+                    "즉시 거절하고 관련 대화를 중단한다",
+                    "회사에 유리하면 일부만 공유한다"
                 ],
                 "answer": 2,
                 "score": 30,
                 "choice_feedback": {
-                    0: "금액이 작아도 업무 관련 이해관계자에게 받는 재산상 이익은 리스크가 있습니다.",
-                    1: "비공개 수수는 사후에 더 큰 문제로 이어질 수 있습니다.",
-                    2: "정답입니다. 수수하지 않고 거절 + 내부 보고가 기본 대응입니다.",
-                    3: "‘이번만’은 반복 위험을 키우고 기준을 무너뜨립니다."
+                    0: "비공식 제안이라도 담합 리스크는 동일하게 발생합니다.",
+                    1: "‘듣기만 한 것’도 상황에 따라 문제 소지가 될 수 있습니다.",
+                    2: "정답입니다. 즉시 거절 + 대화 중단이 기본 대응입니다.",
+                    3: "일부 공유도 경쟁정보 교환에 해당할 수 있습니다."
                 },
-                "explain": "핵심은 금액보다 ‘업무 관련성’입니다. 이해관계자와의 관계에서 금품·상품권 수수는 공정성 훼손 및 반부패 이슈로 이어질 수 있어 거절 및 보고가 원칙입니다.",
-                "wrong_extra": "실무에서는 ‘감사 표시’라는 표현으로 제안되는 경우가 많습니다. 표현보다 관계와 시점(계약/평가 전후)을 기준으로 판단하세요."
+                "explain": "핵심은 애매하게 넘기지 않고, 선을 분명히 긋는 것입니다. 필요 시 내부 보고까지 이어져야 합니다.",
+                "wrong_extra": "공정거래 이슈는 개인 판단보다 회사 전체 리스크로 확산되기 쉬워, 초기에 명확한 대응이 가장 중요합니다."
             },
             {
                 "type": "mcq",
-                "question": "업무 상대방이 ‘현금은 아니고 식사/골프/차량 지원 같은 편의 제공인데 괜찮지 않냐’고 말합니다. 가장 적절한 판단은?",
+                "question": "아래 중 공정거래 리스크가 가장 큰 대화 주제는 무엇인가요?",
                 "options": [
-                    "현금이 아니므로 문제가 없다",
-                    "상대가 먼저 제안했으니 괜찮다",
-                    "편의 제공도 재산상 이익이 될 수 있어 수수하지 않고 기준을 확인한다",
-                    "개인 시간에 받으면 업무와 무관하다"
+                    "업계 행사 일정 공유",
+                    "일반적인 기술 트렌드 토론",
+                    "입찰 가격/물량/제안조건 조율",
+                    "공개된 보도자료 내용 확인"
                 ],
                 "answer": 2,
                 "score": 30,
                 "choice_feedback": {
-                    0: "재산상 이익은 현금만 의미하지 않습니다.",
-                    1: "상대 제안 여부와 무관하게 수수 리스크는 발생할 수 있습니다.",
-                    2: "정답입니다. 편의 제공도 재산상 이익에 해당할 수 있어 원칙적으로 거절·확인이 필요합니다.",
-                    3: "개인 시간이라도 업무 관련 이해관계자면 리스크가 남습니다."
+                    0: "행사 일정 공유는 일반적으로 위험도가 낮습니다.",
+                    1: "기술 트렌드 일반론은 보통 허용 범주입니다(구체 경쟁정보 제외).",
+                    2: "정답입니다. 가격·물량·조건 조율은 담합 리스크가 큽니다.",
+                    3: "공개된 정보 확인은 상대적으로 위험도가 낮습니다."
                 },
-                "explain": "반부패 관점에서 재산상 이익에는 현금 외에도 상품권, 식사·접대, 편의 제공 등이 포함될 수 있습니다. 애매하면 받지 않고 기준 확인 및 보고가 우선입니다.",
-                "wrong_extra": "‘현금만 아니면 된다’는 오해가 가장 흔합니다. 실제로는 현금성/비현금성 모두 리스크가 될 수 있습니다."
+                "explain": "경쟁사와의 대화는 ‘공개 정보 범위’를 넘지 않도록 특히 주의해야 합니다.",
+                "wrong_extra": "실무에서는 ‘업계 정보 교류’라는 명목으로 가격/조건 이야기가 섞이는 순간 위험해집니다."
             },
             {
                 "type": "text",
-                "question": "업무 상대방의 금품/편의 제공 제안을 거절하고 내부 보고까지 포함하는 답변 문장을 1~2문장으로 작성해보세요.",
+                "question": "경쟁사 제안을 거절하는 짧은 답변 문장을 작성해보세요. (거절 + 대화 중단 + 준법 의식 포함)",
                 "score": 40,
                 "rubric_keywords": {
-                    "거절 표현": ["거절", "받을 수 없습니다", "어렵습니다", "불가"],
-                    "재산상 이익/원칙 언급": ["금품", "상품권", "편의", "재산상", "규정", "반부패"],
-                    "보고/기록 조치": ["보고", "공유", "담당", "준법", "감사", "기록"]
+                    "거절": ["거절", "불가", "할 수 없습니다", "어렵습니다"],
+                    "대화중단": ["입찰", "가격", "논의", "중단"],
+                    "준법/보고": ["준법", "규정", "보고", "내부"]
                 },
-                "model_answer": "업무 관련자에게 금품이나 편의 제공을 받는 것은 반부패 기준상 수수할 수 없어 정중히 거절드립니다. 관련 제안 내용은 내부 준법/감사 담당자에게 보고하고 기록하겠습니다."
+                "model_answer": "입찰 가격이나 조건 관련 논의는 준법상 진행할 수 없습니다. 이 대화는 여기서 중단하겠습니다."
             }
         ]
-    },}
+    }
+}
 
 DEPT_GUIDE = {
     "영업팀": "거래처 접점이 많아 접대·리베이트·공정거래 이슈에 특히 민감합니다.",
@@ -649,12 +657,157 @@ def render_audio_status_hint():
                 play_sfx_now("final")
 
 
+
+def _normalize_log_row(raw: dict) -> dict:
+    raw = raw or {}
+    clean = {}
+    for k, v in raw.items():
+        if k is None:
+            continue
+        key = str(k).strip()
+        if key == "":
+            continue
+        if isinstance(v, list):
+            v = " | ".join([str(x) for x in v if str(x).strip()])
+        clean[key] = v
+
+    # 스키마 호환 보정 (구버전 로그 포함)
+    if not str(clean.get("organization", "")).strip():
+        clean["organization"] = clean.get("department", "") or "미분류"
+    if "department" not in clean:
+        clean["department"] = clean.get("organization", "")
+    if "mission_key" not in clean and "question_code" in clean:
+        clean["mission_key"] = str(clean.get("question_code", "")).split("_Q")[0]
+    if "question_index" not in clean or str(clean.get("question_index", "")).strip() == "":
+        qc = str(clean.get("question_code", ""))
+        m = re.search(r"_Q(\d+)", qc)
+        clean["question_index"] = int(m.group(1)) if m else 0
+    if not str(clean.get("question_code", "")).strip():
+        mk = str(clean.get("mission_key", "")).strip()
+        qn = str(clean.get("question_index", "")).strip()
+        clean["question_code"] = f"{mk}_Q{qn}" if mk and qn else ""
+    if not str(clean.get("mission_title", "")).strip():
+        mk = str(clean.get("mission_key", "")).strip()
+        clean["mission_title"] = SCENARIOS.get(mk, {}).get("title", mk)
+
+    norm = {k: clean.get(k, "") for k in LOG_FIELDNAMES}
+    # 숫자형 컬럼 보정
+    for col in ["question_index", "awarded_score", "max_score", "attempt_no_for_mission"]:
+        v = norm.get(col, "")
+        try:
+            if v == "" or v is None:
+                norm[col] = 0
+            else:
+                norm[col] = int(float(v))
+        except Exception:
+            norm[col] = 0
+    # 문자열 컬럼 보정
+    for col in ["timestamp", "name", "organization", "department", "mission_key", "mission_title", "question_code", "question_type", "question", "selected_or_text", "is_correct"]:
+        val = norm.get(col, "")
+        if val is None:
+            val = ""
+        norm[col] = str(val)
+    if not norm["organization"].strip():
+        norm["organization"] = "미분류"
+    return norm
+
+
+def _read_log_rows_tolerant():
+    if not LOG_FILE.exists():
+        return []
+
+    rows = []
+    # 표준 CSV 파서 (필드 수 불일치 행도 최대한 수용)
+    with open(LOG_FILE, "r", newline="", encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f, restkey="__extra__")
+        for row in reader:
+            if row is None:
+                continue
+            rows.append(_normalize_log_row(row))
+    return rows
+
+
+def _ensure_log_schema_file():
+    """헤더가 구버전이거나 스키마가 섞인 경우 현재 스키마로 정규화."""
+    if not LOG_FILE.exists():
+        return
+
+    need_rewrite = False
+    try:
+        with open(LOG_FILE, "r", newline="", encoding="utf-8-sig") as f:
+            reader = csv.reader(f)
+            header = next(reader, [])
+        if [str(x).strip() for x in header] != LOG_FIELDNAMES:
+            need_rewrite = True
+    except Exception:
+        need_rewrite = True
+
+    if not need_rewrite:
+        return
+
+    rows = _read_log_rows_tolerant()
+    with open(LOG_FILE, "w", newline="", encoding="utf-8-sig") as f:
+        writer = csv.DictWriter(f, fieldnames=LOG_FIELDNAMES)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(_normalize_log_row(row))
+
+
+def _coerce_log_df(df: pd.DataFrame) -> pd.DataFrame:
+    """관리자 통계용 컬럼/타입 정규화."""
+    if df is None:
+        return pd.DataFrame()
+
+    df = df.copy()
+    # 예상 컬럼 채우기
+    for col in LOG_FIELDNAMES:
+        if col not in df.columns:
+            df[col] = ""
+
+    # 문자열 컬럼 정리
+    for col in ["name", "organization", "department", "mission_key", "mission_title", "question_code", "question_type", "question", "selected_or_text", "is_correct"]:
+        df[col] = df[col].fillna("").astype(str)
+
+    # 기관 보정
+    df["organization"] = df["organization"].replace("", pd.NA).fillna(df["department"]).fillna("미분류").astype(str)
+
+    # question_index / question_code 복원
+    qidx_from_code = pd.to_numeric(df["question_code"].astype(str).str.extract(r"_Q(\d+)")[0], errors="coerce")
+    qidx_existing = pd.to_numeric(df["question_index"], errors="coerce")
+    df["question_index"] = qidx_existing.fillna(qidx_from_code).fillna(0).astype(int)
+
+    mk_from_code = df["question_code"].astype(str).str.split("_Q").str[0]
+    df["mission_key"] = df["mission_key"].replace("", pd.NA).fillna(mk_from_code).fillna("").astype(str)
+
+    # mission_title 복원
+    if "mission_title" not in df.columns:
+        df["mission_title"] = ""
+    df["mission_title"] = df["mission_title"].replace("", pd.NA)
+    mapped_titles = df["mission_key"].map(lambda x: SCENARIOS.get(str(x), {}).get("title", str(x)))
+    df["mission_title"] = df["mission_title"].fillna(mapped_titles).fillna("미상 테마").astype(str)
+
+    # 숫자 컬럼
+    for col in ["awarded_score", "max_score", "attempt_no_for_mission"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+
+    # 시간 컬럼
+    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+
+    # 완전 빈 행 제거
+    if "question_code" in df.columns:
+        df = df[~((df["question_code"].str.strip() == "") & (df["question"].str.strip() == ""))].copy()
+
+    return df
+
+
+
+
 def append_attempt_log(mission_key: str, q_idx: int, q_type: str, payload: dict):
     user = st.session_state.get("user_info", {})
     mission = SCENARIOS[mission_key]
     question = mission["quiz"][q_idx]
 
-    row = {
+    row = _normalize_log_row({
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "name": user.get("name", ""),
         "organization": user.get("org", ""),
@@ -670,20 +823,20 @@ def append_attempt_log(mission_key: str, q_idx: int, q_type: str, payload: dict)
         "awarded_score": payload.get("awarded_score", 0),
         "max_score": question.get("score", 0),
         "attempt_no_for_mission": st.session_state.attempt_counts.get(mission_key, 0),
-    }
+    })
 
     st.session_state.attempt_history.append(row)
 
     try:
+        _ensure_log_schema_file()
         file_exists = LOG_FILE.exists()
         with open(LOG_FILE, "a", newline="", encoding="utf-8-sig") as f:
-            writer = csv.DictWriter(f, fieldnames=list(row.keys()))
+            writer = csv.DictWriter(f, fieldnames=LOG_FIELDNAMES)
             if not file_exists:
                 writer.writeheader()
             writer.writerow(row)
     except Exception as e:
         st.session_state.log_write_error = str(e)
-
 
 def evaluate_text_answer(answer_text: str, rubric_keywords: dict, max_score: int):
     text = (answer_text or "").strip()
@@ -735,17 +888,21 @@ def reset_game():
     st.rerun()
 
 
+
 def _load_log_df():
     if not LOG_FILE.exists():
         return None, "아직 누적 로그 파일이 없습니다."
     try:
-        df = pd.read_csv(LOG_FILE, encoding="utf-8-sig")
+        rows = _read_log_rows_tolerant()
+        if not rows:
+            return None, "로그 데이터가 비어 있습니다."
+        df = pd.DataFrame(rows)
+        df = _coerce_log_df(df)
+        if df.empty:
+            return None, "로그 데이터가 비어 있습니다."
+        return df, None
     except Exception as e:
         return None, f"로그 파일을 읽지 못했습니다: {e}"
-    if df.empty:
-        return None, "로그 데이터가 비어 있습니다."
-    return df, None
-
 
 def _build_participant_snapshot(df: pd.DataFrame):
     df = df.copy()
@@ -1077,32 +1234,19 @@ def render_admin_page():
                 mime="text/csv",
                 use_container_width=True,
             )
+
 def render_admin_question_stats():
     st.markdown("### 🛠 관리자용 문항별 정답률 통계")
 
-    if not LOG_FILE.exists():
-        st.info("아직 누적 로그 파일이 없습니다. 교육을 1회 이상 진행하면 통계가 생성됩니다.")
+    df, err = _load_log_df()
+    if err:
+        st.info(err)
         return
 
-    try:
-        df = pd.read_csv(LOG_FILE, encoding="utf-8-sig")
-    except Exception as e:
-        st.error(f"로그 파일을 읽지 못했습니다: {e}")
-        return
-
+    df = _coerce_log_df(df)
     if df.empty:
         st.info("로그 데이터가 비어 있습니다.")
         return
-
-    for col in ["awarded_score", "max_score", "question_index"]:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
-
-    if "timestamp" in df.columns:
-        df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
-
-    if "question_code" not in df.columns:
-        df["question_code"] = df["mission_key"].astype(str) + "_Q" + df["question_index"].astype(int).astype(str)
 
     def _is_correct_norm(row):
         qtype = str(row.get("question_type", "")).lower()
@@ -1117,28 +1261,37 @@ def render_admin_question_stats():
     df["is_correct_norm"] = df.apply(_is_correct_norm, axis=1)
 
     name_series = df["name"].astype(str) if "name" in df.columns else pd.Series([""] * len(df))
-    if "organization" in df.columns:
-        org_series = df["organization"].astype(str)
-    elif "department" in df.columns:
-        org_series = df["department"].astype(str)
-    else:
-        org_series = pd.Series([""] * len(df))
+    org_series = df["organization"].astype(str) if "organization" in df.columns else pd.Series([""] * len(df))
     df["learner_key"] = name_series + "|" + org_series
 
-    df["question_label"] = df["mission_title"].astype(str) + " · Q" + df["question_index"].astype(int).astype(str)
+    qidx = pd.to_numeric(df.get("question_index", 0), errors="coerce").fillna(0).astype(int)
+    mtitle = df.get("mission_title", pd.Series(["미상 테마"] * len(df))).astype(str)
+    df["question_label"] = mtitle + " · Q" + qidx.astype(str)
+
+    blank_qc = df["question_code"].astype(str).str.strip() == ""
+    df.loc[blank_qc, "question_code"] = (
+        df.loc[blank_qc, "mission_key"].astype(str) + "_Q" + qidx.loc[blank_qc].astype(str)
+    )
+
+    stat_df = df[df["question_code"].astype(str).str.strip() != ""].copy()
+    if stat_df.empty:
+        st.info("문항 통계를 만들 수 있는 로그가 없습니다.")
+        return
 
     attempt_stats = (
-        df.groupby(["question_code", "question_label"], as_index=False)
-          .agg(
-              attempts=("is_correct_norm", "count"),
-              corrects=("is_correct_norm", "sum"),
-              avg_score=("awarded_score", "mean"),
-              max_score=("max_score", "max"),
-          )
+        stat_df.groupby(["question_code", "question_label"], as_index=False)
+        .agg(
+            attempts=("is_correct_norm", "count"),
+            corrects=("is_correct_norm", "sum"),
+            avg_score=("awarded_score", "mean"),
+            max_score=("max_score", "max"),
+        )
     )
-    attempt_stats["attempt_correct_rate"] = (attempt_stats["corrects"] / attempt_stats["attempts"] * 100).round(1)
+    attempt_stats["attempt_correct_rate"] = (
+        attempt_stats["corrects"] / attempt_stats["attempts"].replace(0, 1) * 100
+    ).round(1)
 
-    df_sorted = df.sort_values("timestamp", ascending=True) if "timestamp" in df.columns else df.copy()
+    df_sorted = stat_df.sort_values("timestamp", ascending=True)
     first_attempt_df = df_sorted.drop_duplicates(subset=["learner_key", "question_code"], keep="first")
 
     first_stats = (
@@ -1148,7 +1301,9 @@ def render_admin_question_stats():
             first_corrects=("is_correct_norm", "sum"),
         )
     )
-    first_stats["first_correct_rate"] = (first_stats["first_corrects"] / first_stats["first_attempts"] * 100).round(1)
+    first_stats["first_correct_rate"] = (
+        first_stats["first_corrects"] / first_stats["first_attempts"].replace(0, 1) * 100
+    ).round(1)
 
     stats = attempt_stats.merge(first_stats, on="question_code", how="left")
     stats["avg_score_rate"] = ((stats["avg_score"] / stats["max_score"].replace(0, 1)) * 100).round(1)
@@ -1173,13 +1328,17 @@ def render_admin_question_stats():
     view_df = stats[view_cols].rename(columns=rename_map)
 
     st.dataframe(view_df, use_container_width=True)
-    chart_df = view_df[["문항", "첫 시도 정답률(%)"]].copy().set_index("문항")
-    st.bar_chart(chart_df)
+    if not view_df.empty:
+        chart_df = view_df[["문항", "첫 시도 정답률(%)"]].copy().set_index("문항")
+        st.bar_chart(chart_df)
 
     st.caption(
         f"※ 주관식은 점수율 {int(TEXT_CORRECT_THRESHOLD*100)}% 이상을 '정답'으로 집계합니다. "
         "임계값은 TEXT_CORRECT_THRESHOLD로 조정할 수 있습니다."
     )
+
+# =========================================================
+# 6) UI 조각들
 
 # =========================================================
 # 6) UI 조각들 (맵, 브리핑, 퀴즈)
