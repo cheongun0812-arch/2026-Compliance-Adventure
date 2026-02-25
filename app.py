@@ -13,11 +13,13 @@ except Exception:
 import streamlit.components.v1 as components
 import os
 import re
+import difflib
+import html
 
 # =========================================================
 # 1) 페이지 설정 / 스타일
 # =========================================================
-st.set_page_config(page_title="2026 Compliance Adventure", layout="centered")
+st.set_page_config(page_title="2026 Compliance Adventure", layout="wide")
 
 st.markdown("""
 <style>
@@ -25,9 +27,70 @@ st.markdown("""
     background-color: #0E1117;
     color: #EAEAEA;
 }
-.block-container {
-    padding-top: 1.2rem;
-    padding-bottom: 2rem;
+.block-container, [data-testid="stMainBlockContainer"] {
+    max-width: 1280px;
+    margin: 0 auto;
+    padding-top: 6.8rem !important;
+    padding-bottom: 2.4rem !important;
+    padding-left: 2.1rem !important;
+    padding-right: 2.1rem !important;
+}
+@media (max-width: 900px) {
+    .block-container, [data-testid="stMainBlockContainer"] {
+        padding-top: 3.2rem !important;
+        padding-left: 0.9rem !important;
+        padding-right: 0.9rem !important;
+    }
+}
+
+/* 전체 가독성(다크 배경) */
+html, body, [data-testid="stAppViewContainer"], [data-testid="stMainBlockContainer"] {
+    color: #F4F7FF !important;
+}
+h1, h2, h3, h4, h5, h6, p, li {
+    color: #F4F7FF !important;
+}
+[data-testid="stMarkdownContainer"] p,
+[data-testid="stMarkdownContainer"] li,
+[data-testid="stMarkdownContainer"] span {
+    color: #F4F7FF !important;
+}
+label, .stCaption, small {
+    color: #DDE6F7 !important;
+}
+
+/* 퀴즈 선택지 / 입력창 가독성 */
+div[role="radiogroup"] label,
+div[role="radiogroup"] label * {
+    color: #F7FAFF !important;
+}
+[data-testid="stRadio"] > label {
+    color: #EAF1FF !important;
+    font-weight: 700 !important;
+    font-size: 1rem !important;
+}
+div[role="radiogroup"] > label {
+    background: #151D29;
+    border: 1px solid #2D3A50;
+    border-radius: 12px;
+    padding: 10px 12px;
+    margin: 0 0 8px 0;
+    line-height: 1.45;
+}
+div[role="radiogroup"] > label:hover {
+    border-color: #3F5C86;
+    background: #182233;
+}
+[data-testid="stTextArea"] textarea,
+[data-testid="stTextInput"] input {
+    background: #161A22 !important;
+    color: #F7FAFF !important;
+    border: 1px solid #334158 !important;
+}
+[data-testid="stTextArea"] textarea::placeholder,
+[data-testid="stTextInput"] input::placeholder {
+    color: #AEBBD0 !important;
+    opacity: 1 !important;
 }
 
 /* 버튼 */
@@ -96,7 +159,8 @@ div.stButton > button:first-child:hover {
 }
 .map-fade-wrap {
     width: 100%;
-    margin-bottom: 4px;
+    max-width: 1060px;
+    margin: 0 auto 6px auto;
 }
 .map-fade-img {
     width: 100%;
@@ -164,6 +228,70 @@ div.stButton > button:first-child:hover {
     margin-bottom: 10px;
 }
 
+/* 퀴즈/브리핑 레이아웃 여백 */
+.quiz-question-box {
+    background: #111824;
+    border: 1px solid #2A3344;
+    border-radius: 14px;
+    padding: 14px 16px;
+    margin-bottom: 10px;
+}
+.quiz-question-kicker {
+    color: #9FB2D4;
+    font-size: 0.85rem;
+    font-weight: 700;
+    margin-bottom: 4px;
+}
+.quiz-question-title {
+    color: #F8FBFF;
+    font-size: 1.95rem;
+    font-weight: 800;
+    line-height: 1.22;
+    letter-spacing: -0.01em;
+}
+.quiz-help-text {
+    color: #C6D5EE;
+    font-size: 0.95rem;
+    margin-bottom: 8px;
+}
+.quiz-left-image-wrap {
+    background: #121826;
+    border: 1px solid #2A3344;
+    border-radius: 14px;
+    padding: 10px;
+    margin-bottom: 10px;
+}
+.quiz-left-caption {
+    color: #D7E4FB;
+    text-align: center;
+    margin-top: 6px;
+    font-weight: 600;
+}
+.quiz-side-tip {
+    line-height: 1.55;
+}
+.brief-actions-wrap {
+    margin-top: 6px;
+}
+.stTextArea textarea {
+    font-size: 0.98rem !important;
+    line-height: 1.5 !important;
+}
+@media (max-width: 1200px) {
+    .quiz-question-title {
+        font-size: 1.65rem;
+    }
+}
+@media (max-width: 900px) {
+    .quiz-question-title {
+        font-size: 1.25rem;
+        line-height: 1.3;
+    }
+    div[role="radiogroup"] > label {
+        padding: 8px 10px;
+    }
+}
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -224,6 +352,10 @@ def safe_dataframe(data, **kwargs):
             st.write(df_obj)
         else:
             st.write(data)
+
+
+def render_top_spacer():
+    st.markdown("<div style='height:24px;'></div>", unsafe_allow_html=True)
 
 
 def safe_bar_chart(data, **kwargs):
@@ -408,6 +540,7 @@ SCENARIOS = {
                     "절차/대안": ["절차", "승인", "확인", "진행"],
                     "리스크 인식": ["위반", "분쟁", "리스크"]
                 },
+                "sample_answer": "예시) 착공 전 서면 계약(또는 발주서) 확인이 원칙이니, 관련 서면 발급·승인 절차를 먼저 진행한 뒤 착수하겠습니다.",
                 "model_answer": "서면 계약(또는 발주서) 발급 없이 착공하면 분쟁 및 준법 리스크가 있어, 관련 서면 발급과 승인 절차 확인 후 바로 진행하겠습니다."
             }
         ]
@@ -480,6 +613,7 @@ SCENARIOS = {
                     "행동": ["클릭", "열지", "실행", "중단"],
                     "보고/확인": ["보안팀", "신고", "확인", "공유"]
                 },
+                "sample_answer": "예시) 발신자와 첨부파일이 의심되어 실행하지 않았습니다. 보안팀에 공유해 진위 확인 후 조치하겠습니다.",
                 "model_answer": "출처가 불분명한 메일에 실행 파일(.exe) 첨부가 있어 의심되어 파일은 열지 않았습니다. 보안팀에 신고하고 진위 여부를 확인 부탁드립니다."
             }
         ]
@@ -552,6 +686,7 @@ SCENARIOS = {
                     "재산상 이익/원칙 언급": ["금품", "상품권", "편의", "재산상", "규정", "반부패"],
                     "보고/기록 조치": ["보고", "공유", "담당", "준법", "감사", "기록"]
                 },
+                "sample_answer": "예시) 업무 관련 편의·상품권 제공은 받을 수 없어 정중히 사양하겠습니다. 관련 제안은 내부 담당에 공유하고 기준에 따라 처리하겠습니다.",
                 "model_answer": "업무 관련자에게 금품이나 편의 제공을 받는 것은 반부패 기준상 수수할 수 없어 정중히 거절드립니다. 관련 제안 내용은 내부 준법/감사 담당자에게 보고하고 기록하겠습니다."
             }
         ]
@@ -602,6 +737,41 @@ def ensure_quiz_progress(m_key: str):
             "current_idx": 0,
             "submissions": {}
         }
+
+
+def _normalize_for_similarity(text: str) -> str:
+    s = str(text or "").strip().lower()
+    s = re.sub(r"\s+", "", s)
+    s = re.sub(r"[^0-9a-zA-Z가-힣]", "", s)
+    return s
+
+
+def is_near_copy_answer(answer_text: str, *examples: str, threshold: float = 0.92) -> bool:
+    user = _normalize_for_similarity(answer_text)
+    if not user:
+        return False
+    for ex in examples:
+        exn = _normalize_for_similarity(ex)
+        if not exn:
+            continue
+        if user == exn:
+            return True
+        ratio = difflib.SequenceMatcher(None, user, exn).ratio()
+        if ratio >= threshold:
+            return True
+    return False
+
+
+def get_text_question_sample_answer(q_data: dict) -> str:
+    sample = str(q_data.get("sample_answer", "") or "").strip()
+    if sample:
+        return sample
+    model = str(q_data.get("model_answer", "") or "").strip()
+    if not model:
+        return ""
+    # 모델답안을 그대로 노출하지 않도록 길이 축약 + 안내 문구로 사용
+    short = model[:90] + ("..." if len(model) > 90 else "")
+    return short
 
 
 def get_theme_status(m_key: str):
@@ -739,27 +909,8 @@ def render_audio_system():
 
 
 def render_audio_status_hint():
-    with st.expander("🔊 사운드 파일 점검", expanded=False):
-        rows = []
-        for k, v in BGM.items():
-            rows.append({"구분": f"BGM · {k}", "파일명": v.name, "존재": "✅" if v.exists() else "❌"})
-        for k, v in SFX.items():
-            rows.append({"구분": f"SFX · {k}", "파일명": v.name, "존재": "✅" if v.exists() else "❌"})
-        safe_dataframe(pd.DataFrame(rows), use_container_width=True)
-        st.caption("※ 브라우저 자동재생 정책에 따라 첫 클릭(모험 시작/버튼 클릭) 이후에 사운드가 재생되는 경우가 있습니다.")
-        c1, c2 = st.columns(2)
-        with c1:
-            if st.button("정답 효과음 테스트", key="sfx_test_correct"):
-                play_sfx_now("correct")
-            if st.button("정복 효과음 테스트", key="sfx_test_conquer"):
-                play_sfx_now("conquer")
-        with c2:
-            if st.button("오답 효과음 테스트", key="sfx_test_wrong"):
-                play_sfx_now("wrong")
-            if st.button("최종 효과음 테스트", key="sfx_test_final"):
-                play_sfx_now("final")
-
-
+    # 패널 제거 (최종본에서 사용하지 않음)
+    return
 
 def _normalize_log_row(raw: dict) -> dict:
     raw = raw or {}
@@ -1220,7 +1371,8 @@ def _render_employee_lookup_popup_body(name_query: str = ""):
     p2.text_input("이름", value=str(preview.get("name", "")), disabled=True, key="employee_modal_preview_name")
     p3.text_input("소속 기관", value=str(preview.get("organization", "")), disabled=True, key="employee_modal_preview_org")
 
-    c1, c2 = st.columns(2)
+    st.markdown("<div class='brief-actions-wrap'></div>", unsafe_allow_html=True)
+    c1, c2 = st.columns([1, 1], gap='large')
     with c1:
         if st.button("✅ 이 정보로 확인", key="employee_modal_confirm_btn", use_container_width=True):
             row = candidates.iloc[int(selected_idx)].to_dict()
@@ -1657,8 +1809,6 @@ def render_org_dashboard(compact: bool = False):
 
 def render_admin_page():
     st.title("🔐 관리자 대시보드")
-    if st.session_state.get("audio_debug"):
-        render_audio_status_hint()
 
     if not st.session_state.get("admin_authed", False):
         render_admin_password_gate()
@@ -1955,7 +2105,7 @@ def render_briefing(m_key: str):
     chips = "".join([f"<span class='brief-chip'>{k}</span>" for k in brief["keywords"]])
     st.markdown(f"<div style='margin-bottom:10px;'>{chips}</div>", unsafe_allow_html=True)
 
-    col1, col2 = st.columns(2)
+    col1, col2 = st.columns([1, 1], gap='large')
     with col1:
         red_html = "".join([f"<li>{x}</li>" for x in brief["red_flags"]])
         st.markdown(
@@ -1980,7 +2130,8 @@ def render_briefing(m_key: str):
         )
 
 
-    c1, c2 = st.columns(2)
+    st.markdown("<div class='brief-actions-wrap'></div>", unsafe_allow_html=True)
+    c1, c2 = st.columns([1, 1], gap='large')
     with c1:
         if st.button("📝 퀴즈 시작", use_container_width=True):
             st.session_state.stage = "quiz"
@@ -2030,7 +2181,17 @@ def render_mcq_question(m_key: str, q_idx: int, q_data: dict):
                 st.rerun()
         return
 
-    st.markdown(f"### Q{q_idx+1}. {q_data['question']}")
+    q_text = html.escape(str(q_data['question']))
+    st.markdown(
+        f"""
+        <div class='quiz-question-box'>
+          <div class='quiz-question-kicker'>QUESTION {q_idx+1}</div>
+          <div class='quiz-question-title'>Q{q_idx+1}. {q_text}</div>
+        </div>
+        <div class='quiz-help-text'>아래 보기 중 가장 적절한 답을 선택하세요.</div>
+        """,
+        unsafe_allow_html=True,
+    )
     selected = st.radio(
         "답을 선택하세요",
         options=list(range(len(q_data["options"]))),
@@ -2116,15 +2277,44 @@ def render_text_question(m_key: str, q_idx: int, q_data: dict):
             st.rerun()
         return
 
-    st.markdown(f"### Q{q_idx+1}. {q_data['question']}")
+    q_text = html.escape(str(q_data['question']))
+    st.markdown(
+        f"""
+        <div class='quiz-question-box'>
+          <div class='quiz-question-kicker'>QUESTION {q_idx+1}</div>
+          <div class='quiz-question-title'>Q{q_idx+1}. {q_text}</div>
+        </div>
+        <div class='quiz-help-text'>원칙을 설명하고, 가능한 대안이나 후속 조치를 함께 적어보세요.</div>
+        """,
+        unsafe_allow_html=True,
+    )
+    sample_answer = get_text_question_sample_answer(q_data)
+    if sample_answer:
+        st.markdown(
+            f"""
+            <div class='card'>
+              <div class='card-title'>🧩 Sample Answer (예시)</div>
+              <div style='line-height:1.55;'>{sample_answer}</div>
+              <div style='margin-top:8px; color:#B7C7E6; font-size:0.88rem;'>
+                ※ 예시는 작성 방향(원칙 설명 + 대안 제시)을 보여주는 참고 문장입니다. 그대로 복사하지 말고 본인 표현으로 바꿔 작성하세요.
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
     answer_text = st.text_area(
         "답안을 입력하세요",
         key=f"text_{m_key}_{q_idx}",
-        height=120,
-        placeholder="예: 서면 계약 발급 없이 진행하면 리스크가 있어, 관련 절차 확인 후 진행하겠습니다.",
+        height=150,
+        placeholder=(sample_answer if sample_answer else "예: 원칙을 설명하고, 가능한 대안(보고/확인/절차)을 함께 적어보세요."),
     )
 
     if st.button("제출하기", key=f"submit_text_{m_key}_{q_idx}", use_container_width=True):
+        if is_near_copy_answer(answer_text, q_data.get("sample_answer", ""), q_data.get("model_answer", "")):
+            st.warning("예시/모범답안 문장을 그대로 복사한 답안은 제출할 수 없습니다. 같은 뜻이어도 본인 표현으로 바꿔 작성해주세요.")
+            return
+
         eval_res = evaluate_text_answer(answer_text, q_data["rubric_keywords"], q_data["score"])
         st.session_state.attempt_counts[m_key] = st.session_state.attempt_counts.get(m_key, 0) + 1
 
@@ -2185,18 +2375,31 @@ def render_quiz(m_key: str):
         unsafe_allow_html=True,
     )
 
-    col_left, col_right = st.columns([1, 2])
+    col_left, col_right = st.columns([1.0, 1.65], gap='large')
     with col_left:
+        st.markdown(
+            """
+            <div class='card' style='margin-bottom:8px;'>
+              <div class='card-title'>안내 캐릭터</div>
+              <div style='color:#BFD0EC; font-size:0.9rem;'>문항 옆에서 핵심 포인트를 함께 확인해보세요.</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
         if MASTER_IMAGE.exists():
-            st.image(str(MASTER_IMAGE), caption="클린 마스터", use_container_width=True)
+            img_c1, img_c2, img_c3 = st.columns([0.08, 0.84, 0.08])
+            with img_c2:
+                st.image(str(MASTER_IMAGE), use_container_width=True)
+            st.markdown("<div class='quiz-left-caption'>클린 마스터</div>", unsafe_allow_html=True)
         else:
             st.info("클린 마스터 이미지 없음")
 
         st.markdown(
             """
-            <div class='card'>
+            <div class='card quiz-side-tip'>
               <div class='card-title'>진행 팁</div>
               <div>정답 여부보다 <b>왜 그런지</b>를 이해하는 게 핵심이에요.</div>
+              <div style='margin-top:6px; color:#BFD0EC;'>보기/해설을 읽고 현업 상황에 어떻게 적용할지 같이 생각해보세요.</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -2207,6 +2410,7 @@ def render_quiz(m_key: str):
             st.rerun()
 
     with col_right:
+        st.markdown("<div style='height:4px;'></div>", unsafe_allow_html=True)
         if q_data["type"] == "mcq":
             render_mcq_question(m_key, current_idx, q_data)
         elif q_data["type"] == "text":
@@ -2222,7 +2426,6 @@ render_audio_system()
 
 with st.sidebar:
     st.checkbox("🔊 배경음악 재생", key="bgm_enabled")
-    st.checkbox("사운드 파일 점검 패널", key="audio_debug")
     st.markdown("---")
     st.caption("관리자")
     if st.button("🔐 관리자 대시보드", use_container_width=True):
@@ -2234,10 +2437,9 @@ with st.sidebar:
             st.rerun()
 
 if st.session_state.stage == "intro":
+    render_top_spacer()
     st.title("🛡️ 2026 Compliance Adventure")
     st.caption("Guardian Training · 컴플라이언스 테마 정복형 학습")
-    if st.session_state.get("audio_debug"):
-        render_audio_status_hint()
 
     intro_map = get_current_map_image()
     if intro_map:
@@ -2331,12 +2533,11 @@ if st.session_state.stage == "intro":
                 st.warning("참가자 확인 정보를 다시 선택해주세요.")
 
 elif st.session_state.stage == "map":
+    render_top_spacer()
     user_name = st.session_state.user_info.get("name", "가디언")
     user_org = st.session_state.user_info.get("org", "")
 
     st.title(f"🗺️ {user_name} 가디언의 지도")
-    if st.session_state.get("audio_debug"):
-        render_audio_status_hint()
     cap_parts = []
     user_emp_no = st.session_state.user_info.get("employee_no", "")
     if user_emp_no:
@@ -2389,6 +2590,7 @@ elif st.session_state.stage == "map":
             st.rerun()
 
 elif st.session_state.stage == "briefing":
+    render_top_spacer()
     m_key = st.session_state.get("current_mission")
     if not m_key or m_key not in SCENARIOS:
         st.warning("테마 정보가 없어 지도로 돌아갑니다.")
@@ -2403,6 +2605,7 @@ elif st.session_state.stage == "briefing":
     render_briefing(m_key)
 
 elif st.session_state.stage == "quiz":
+    render_top_spacer()
     m_key = st.session_state.get("current_mission")
     if not m_key or m_key not in SCENARIOS:
         st.warning("퀴즈 정보가 없어 지도로 돌아갑니다.")
@@ -2416,9 +2619,11 @@ elif st.session_state.stage == "quiz":
     render_quiz(m_key)
 
 elif st.session_state.stage == "admin":
+    render_top_spacer()
     render_admin_page()
 
 elif st.session_state.stage == "ending":
+    render_top_spacer()
     user_name = st.session_state.user_info.get("name", "가디언")
     user_org = st.session_state.user_info.get("org", "")
     score = st.session_state.score
@@ -2435,7 +2640,8 @@ elif st.session_state.stage == "ending":
     st.title("🏆 Guardian Training Complete")
     st.success(f"{user_name} 가디언님, 모든 테마를 정복했습니다!")
 
-    c1, c2 = st.columns(2)
+    st.markdown("<div class='brief-actions-wrap'></div>", unsafe_allow_html=True)
+    c1, c2 = st.columns([1, 1], gap='large')
     with c1:
         st.markdown(
             f"""
@@ -2493,7 +2699,8 @@ elif st.session_state.stage == "ending":
 
     st.info("관리자용 기관 대시보드 / 문항 통계는 좌측 사이드바의 ‘관리자 대시보드’에서 확인할 수 있습니다.")
 
-    c1, c2 = st.columns(2)
+    st.markdown("<div class='brief-actions-wrap'></div>", unsafe_allow_html=True)
+    c1, c2 = st.columns([1, 1], gap='large')
     with c1:
         if st.button("🗺️ 지도 다시 보기", use_container_width=True):
             st.session_state.stage = "map"
