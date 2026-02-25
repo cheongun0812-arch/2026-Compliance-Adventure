@@ -379,6 +379,12 @@ div[data-testid="stDialog"] [data-testid="stTextInput"] > label {
     color: #42526B !important;
     font-weight: 700 !important;
 }
+div[data-testid="stDialog"] [data-testid="stDialogHeader"] * {
+    color: #172233 !important;
+}
+div[data-testid="stDialog"] button[kind="header"] svg {
+    color: #172233 !important;
+}
 
 /* 인트로 참가자 확인(메인화면) 읽기 전용 정보 카드 */
 .confirm-readonly-field {
@@ -391,9 +397,9 @@ div[data-testid="stDialog"] [data-testid="stTextInput"] > label {
     margin: 0 0 6px 2px;
 }
 .confirm-readonly-value {
-    background: #121A27;
-    color: #F4F8FF !important;
-    border: 1px solid #33445F;
+    background: #F6F8FC;
+    color: #1A2433 !important;
+    border: 1px solid #D5DEEC;
     border-radius: 10px;
     padding: 10px 12px;
     min-height: 42px;
@@ -645,14 +651,10 @@ SCENARIOS = {'subcontracting': {'title': '🚜 하도급의 계곡',
                              {'type': 'text',
                               'code': 'SC-3',
                               'score': 30,
-                              'question': '팀장에게 보낼 답변 문장을 짧게 작성해보세요. (원칙 설명 + 대안 제시 포함)',
-                              'sample_answer': '착공 전 서면발급이 원칙이라 우선 발주서와 변경조건을 확인하겠습니다. 급한 일정은 임시 범위를 문서로 합의한 뒤 바로 '
-                                               '진행하겠습니다.',
-                              'model_answer': '예시 답변: “하도급 업무는 착공 전 서면 발급과 조건 명확화가 원칙입니다. 현재 범위/단가를 먼저 문서로 확인하고, 긴급 '
-                                              '건이면 최소 범위라도 변경합의서를 즉시 발급받아 진행하겠습니다.”',
-                              'rubric_keywords': {'원칙 설명': ['서면', '계약', '발주서', '원칙', '착공 전'],
-                                                  '리스크 언급': ['분쟁', '리스크', '감액', '증빙', '법'],
-                                                  '대안 제시': ['확인', '합의', '변경', '문서', '진행', '승인']}}]},
+                              'question': '검수 근거 없이 일괄 감액 정산 지시를 받았습니다. 팀장에게 보낼 답변 문장을 짧게 작성해보세요. (원칙 + 근거 확인 + 대안 포함)',
+                              'sample_answer': '정당한 사유와 근거 없이 하도급대금을 바로 감액하면 분쟁 소지가 있습니다. 먼저 검수·하자 근거를 확인하고, 조정이 필요하면 협의 내용과 산정 근거를 서면으로 남겨 정산하겠습니다.',
+                              'model_answer': '예시 답변: “하도급대금은 정당한 사유와 객관적 근거 없이 일괄 감액하면 안 됩니다. 우선 검수결과·하자 귀책·산정 근거를 확인하고, 조정 필요 시 협의 내용과 정산 기준을 서면으로 남겨 처리하겠습니다.”',
+                              'rubric_keywords': {'원칙 설명': ['하도급대금', '감액', '정당한 사유', '원칙', '부당'], '근거 확인': ['검수', '하자', '귀책', '증빙', '산정', '근거'], '대안 제시': ['협의', '서면', '기록', '정산', '확인', '처리']}}]},
  'security': {'title': '🔐 정보보안의 요새',
               'briefing': {'title': '정보보안 기본 원칙 브리핑',
                            'summary': '정보보안은 “의심 메일/링크 식별”, “비밀번호·인증정보 보호”, “사고 징후 발견 즉시 보고”가 핵심입니다. 실제 사고는 클릭 한 번으로 '
@@ -2343,77 +2345,64 @@ def render_admin_question_stats():
 # =========================================================
 # 6) UI 조각들 (맵, 브리핑, 퀴즈)
 # =========================================================
+
 def render_conquer_fx_if_needed():
-    if not st.session_state.get("show_conquer_fx"):
+    if st.session_state.get("map_fx_done", False):
         return
 
-    m_key = st.session_state.get("last_cleared_mission")
-    if not m_key or m_key not in SCENARIOS:
-        st.session_state.show_conquer_fx = False
+    stage = int(st.session_state.get("guardian_stage", 0))
+    pending_stage = st.session_state.get("pending_map_fx_stage", None)
+    pending_theme = st.session_state.get("pending_map_fx_theme", None)
+
+    if pending_stage is None:
         return
 
-    title = SCENARIOS[m_key]["title"]
-    theme_icon = THEME_ICONS.get(m_key, "🏳️")
-    cleared_cnt = len(st.session_state.get("completed", []))
+    try:
+        pending_stage = int(pending_stage)
+    except Exception:
+        pending_stage = stage
 
-    total_themes = len(SCENARIO_ORDER)
-    is_final_clear = cleared_cnt >= total_themes
+    # stage 값이 이미 반영된 상태 기준으로 처리
+    is_final_clear = pending_stage >= FINAL_STAGE
 
-    # 최종 테마 정복 직후에는 상단 연출 배너/맵 재노출을 생략 (엔딩 화면 집중)
+    # 시각 효과는 유지하되, 같은 지도를 중복 렌더링하지 않도록 여기서는 텍스트/토스트만 표시
     if is_final_clear:
-        play_sfx_now("conquer")
         try:
-            st.toast(f"{theme_icon} 최종 정복 완료!", icon="🏁")
+            st.toast("🏁 최종 테마 정복 완료!", icon="🎉")
         except Exception:
             pass
-        st.session_state.show_conquer_fx = False
-        return
-
-    fx_box = st.empty()
-    fx_progress = st.progress(0)
-    final_msg = f"✨ {title} 정복 완료! 가디언 훈련 최종 단계가 완료되었습니다." if is_final_clear else f"✨ {title} 정복 완료!"
-    fx_steps = [
-        "🗺️ Guardian’s Map 갱신 중...",
-        f"⚔️ {title} 정복 기록 반영...",
-        final_msg,
-    ]
-
-    for i, msg in enumerate(fx_steps, start=1):
-        fx_box.markdown(
+    else:
+        title = SCENARIOS.get(str(pending_theme), {}).get("title", "테마")
+        title_plain = title.split(" ", 1)[1] if " " in title else title
+        st.markdown(
             f"""
             <div style="
-                background: linear-gradient(135deg, #102313, #152B1A);
-                border: 1px solid #2F7D32;
-                border-radius: 14px;
-                padding: 12px 14px;
-                margin-bottom: 10px;
-                color: #E8F5E9;
+                margin: 6px 0 12px 0;
+                padding: 10px 14px;
+                border-radius: 12px;
+                border: 1px solid rgba(74, 222, 128, .35);
+                background: linear-gradient(90deg, rgba(16,185,129,.12), rgba(59,130,246,.08));
+                color: #EAFBF1;
                 font-weight: 700;
-            ">{msg}</div>
+            ">
+                ✨ {html.escape(title_plain)} 정복 완료! 가디언 맵이 업데이트되었습니다.
+            </div>
             """,
             unsafe_allow_html=True,
         )
-        fx_progress.progress(int(i / len(fx_steps) * 100))
-        time.sleep(0.28)
+        try:
+            st.toast("가디언 맵 업데이트!", icon="🗺️")
+        except Exception:
+            pass
 
-    play_sfx_now("conquer")
-
-    new_map = get_current_map_image()
-    if new_map:
-        show_map_with_fade(new_map, caption=f"✨ Guardian’s Map Updated · stage {min(cleared_cnt, 3)}")
-    else:
-        st.warning("갱신된 맵 이미지를 찾을 수 없습니다. (world_map_0~3.png 확인)")
-
-    st.success(f"{theme_icon} {title} 정복 완료!")
     try:
-        if is_final_clear:
-            st.toast(f"{theme_icon} 최종 정복 완료!", icon="🏁")
-        else:
-            st.toast(f"{theme_icon} 새 구역이 해방되었습니다!", icon="✨")
+        st.balloons()
     except Exception:
         pass
 
-    st.session_state.show_conquer_fx = False
+    st.session_state.map_fx_done = True
+    st.session_state.pop("pending_map_fx_stage", None)
+    st.session_state.pop("pending_map_fx_theme", None)
 
 
 def render_guardian_map():
