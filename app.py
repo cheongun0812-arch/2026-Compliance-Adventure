@@ -4,8 +4,10 @@ from pathlib import Path
 import csv
 import io
 import time
+import uuid
 import base64
 import pandas as pd
+import numpy as np
 try:
     from streamlit.errors import StreamlitInvalidHeightError
 except Exception:
@@ -535,10 +537,24 @@ BASE_DIR = Path(__file__).parent if "__file__" in globals() else Path.cwd()
 ASSET_DIR = BASE_DIR
 LOG_FILE = BASE_DIR / "compliance_training_log.csv"
 LOG_FIELDNAMES = [
-    "timestamp", "employee_no", "name", "organization", "department",
-    "mission_key", "mission_title", "question_index", "question_code",
-    "question_type", "question", "selected_or_text", "is_correct",
-    "awarded_score", "max_score", "attempt_no_for_mission"
+    "timestamp",
+    "training_attempt_id",
+    "attempt_round",
+    "employee_no",
+    "name",
+    "organization",
+    "department",
+    "mission_key",
+    "mission_title",
+    "question_index",
+    "question_code",
+    "question_type",
+    "question",
+    "selected_or_text",
+    "is_correct",
+    "awarded_score",
+    "max_score",
+    "attempt_no_for_mission",
 ]
 
 MAP_STAGE_IMAGES = {
@@ -623,7 +639,8 @@ SCENARIOS = {'subcontracting': {'title': '🚜 하도급의 계곡',
                                                '품질/납기 이슈 근거 없이 일괄 감액 또는 지급 보류'],
                                  'checklist': ['착공 전 발주서/계약서(범위·단가·납기) 발급 여부 확인',
                                                '변경 발생 시 변경사유·변경금액·승인권자 기록 남기기',
-                                               '검수/납품/하자 근거자료를 지급 판단 문서와 연결하기']},
+                                               '검수/납품/하자 근거자료를 지급 판단 문서와 연결하기',
+                                               '감액 검토 시 정당한 사유·산정근거·협의내용을 서면으로 남기기']},
                     'quiz': [{'type': 'mcq',
                               'code': 'SC-1',
                               'score': 35,
@@ -659,10 +676,12 @@ SCENARIOS = {'subcontracting': {'title': '🚜 하도급의 계곡',
                              {'type': 'text',
                               'code': 'SC-3',
                               'score': 30,
-                              'question': '검수 근거 없이 일괄 감액 정산 지시를 받았습니다. 팀장에게 보낼 답변 문장을 짧게 작성해보세요. (원칙 + 근거 확인 + 대안 포함)',
-                              'sample_answer': '정당한 사유와 근거 없이 하도급대금을 바로 감액하면 분쟁 소지가 있습니다. 먼저 검수·하자 근거를 확인하고, 조정이 필요하면 협의 내용과 산정 근거를 서면으로 남겨 정산하겠습니다.',
-                              'model_answer': '예시 답변: “하도급대금은 정당한 사유와 객관적 근거 없이 일괄 감액하면 안 됩니다. 우선 검수결과·하자 귀책·산정 근거를 확인하고, 조정 필요 시 협의 내용과 정산 기준을 서면으로 남겨 처리하겠습니다.”',
-                              'rubric_keywords': {'원칙 설명': ['하도급대금', '감액', '정당한 사유', '원칙', '부당'], '근거 확인': ['검수', '하자', '귀책', '증빙', '산정', '근거'], '대안 제시': ['협의', '서면', '기록', '정산', '확인', '처리']}}]},
+                              'question': '나는 협력사 정산을 검토 중인데, 검수결과나 하자 근거 없이 대금을 일괄 감액하라는 요청을 받았습니다. 이 상황에서 내가 어떻게 처리할지 짧게 작성해보세요. (원칙 + 근거 확인 + 대안 포함)',
+                              'sample_answer': '정당한 사유와 객관적 근거 없이 하도급대금을 바로 감액하지 않겠습니다. 먼저 검수결과·하자 여부·산정 근거를 확인하고, 조정이 필요하면 협의 내용과 정산 기준을 서면으로 남겨 처리하겠습니다.',
+                              'model_answer': '예시 답변: “하도급대금은 정당한 사유와 객관적 산정 근거 없이 일괄 감액하면 분쟁과 법 위반 소지가 있으므로 바로 감액 처리하지 않겠습니다. 우선 검수결과와 하자 귀책, 감액 산정 근거를 확인하고, 조정이 필요하면 협의 내용과 정산 기준을 서면으로 남긴 뒤 처리하겠습니다.”',
+                              'rubric_keywords': {'원칙 설명': {'keywords': ['하도급대금', '감액', '정당한 사유', '부당', '일괄 감액', '바로 감액하지'], 'weight': 3, 'min_hits': 2},
+                                               '근거 확인': {'keywords': ['검수', '하자', '귀책', '산정', '근거', '증빙'], 'weight': 4, 'min_hits': 2},
+                                               '처리/기록 조치': {'keywords': ['협의', '서면', '기록', '문서', '정산 기준', '확인 후'], 'weight': 3, 'min_hits': 2}}}]},
  'security': {'title': '🔐 정보보안의 요새',
               'briefing': {'title': '정보보안 기본 원칙 브리핑',
                            'summary': '정보보안은 “의심 메일/링크 식별”, “비밀번호·인증정보 보호”, “사고 징후 발견 즉시 보고”가 핵심입니다. 실제 사고는 클릭 한 번으로 '
@@ -673,7 +692,8 @@ SCENARIOS = {'subcontracting': {'title': '🚜 하도급의 계곡',
                                          '이상 로그인/파일 암호화 징후를 발견했는데 개인적으로만 처리'],
                            'checklist': ['발신자 도메인·링크 주소·첨부파일 확장자(exe, zip 등) 확인',
                                          '비밀번호/인증코드는 절대 공유하지 않고 공식 시스템에서만 입력',
-                                         '의심 클릭/오발송/계정이상 발견 시 즉시 보안담당·헬프데스크 보고']},
+                                         '의심 클릭/오발송/계정이상 발견 시 즉시 보안담당·헬프데스크 보고',
+                                         '초동보고에는 사고상황·즉시조치·추가점검 요청을 함께 적기']},
               'quiz': [{'type': 'mcq',
                         'code': 'IS-1',
                         'score': 35,
@@ -709,13 +729,12 @@ SCENARIOS = {'subcontracting': {'title': '🚜 하도급의 계곡',
                        {'type': 'text',
                         'code': 'IS-3',
                         'score': 30,
-                        'question': '보안담당자에게 보낼 사고 초동보고 문장을 짧게 작성해보세요. (상황 + 조치 + 요청 포함)',
-                        'sample_answer': '의심 메일 링크를 눌러 계정정보 입력 가능성이 있어 즉시 비밀번호를 변경했습니다. 접속기록 점검과 추가 조치 안내를 요청드립니다.',
-                        'model_answer': '예시 답변: “금일 의심 메일 링크를 클릭해 계정정보 입력 가능성이 확인되어 즉시 비밀번호를 변경했습니다. 관련 계정 접속기록 점검과 추가 '
-                                        '차단 조치가 필요한지 확인 부탁드립니다.”',
-                        'rubric_keywords': {'상황 공유': ['의심', '메일', '링크', '계정', '입력', '사고'],
-                                            '즉시 조치': ['비밀번호', '변경', '차단', '로그아웃', '조치'],
-                                            '요청/보고': ['보고', '확인', '점검', '요청', '보안', '헬프데스크']}}]},
+                        'question': '나는 의심 메일 링크를 클릭한 뒤 계정정보 입력 가능성을 확인했습니다. 이 상황에서 내가 즉시 해야 할 조치와 보고 방향을 짧게 작성해보세요. (상황 + 즉시 조치 + 보고/요청 포함)',
+                        'sample_answer': '의심 링크 클릭으로 계정정보 노출 가능성이 있어 즉시 비밀번호를 변경하고 추가 로그인 여부를 확인하겠습니다. 동시에 보안담당자와 헬프데스크에 사고 사실을 보고하고 접속기록 점검을 요청하겠습니다.',
+                        'model_answer': '예시 답변: “의심 메일 링크 클릭으로 계정정보가 노출됐을 가능성이 있어 즉시 비밀번호를 변경하고 필요한 경우 로그아웃/차단 조치를 진행하겠습니다. 이후 보안담당자와 헬프데스크에 사고 사실을 바로 보고하고, 계정 접속기록 점검과 추가 대응 안내를 요청하겠습니다.”',
+                        'rubric_keywords': {'사고 상황 인지': {'keywords': ['의심', '메일', '링크', '계정', '입력', '노출'], 'weight': 2, 'min_hits': 2},
+                                            '즉시 보호 조치': {'keywords': ['비밀번호', '변경', '차단', '로그아웃', 'OTP', '인증'], 'weight': 4, 'min_hits': 2},
+                                            '보고/점검 요청': {'keywords': ['보고', '보안담당', '헬프데스크', '접속기록', '점검', '요청'], 'weight': 4, 'min_hits': 2}}}]},
  'fairtrade': {'title': '🛡️ 공정거래의 성',
                'briefing': {'title': '공정거래·청렴 기본 원칙 브리핑',
                             'summary': '공정거래·청렴 실무에서는 “이해관계자와의 거리 유지”, “부당한 편의·청탁 거절”, “접촉·제안 발생 시 기록 및 보고”가 핵심입니다. '
@@ -726,7 +745,8 @@ SCENARIOS = {'subcontracting': {'title': '🚜 하도급의 계곡',
                                           '지인·퇴직자 네트워크를 통한 우회 청탁 제안'],
                             'checklist': ['거래처 접촉 시 목적·참석자·제공내역을 내부기준에 따라 기록',
                                           '금품/향응/편의 제공 제안은 즉시 거절하고 상급자·윤리채널 공유',
-                                          '입찰·평가 정보는 권한자 외 비공개, 문의 시 공식 절차로 안내']},
+                                          '입찰·평가 정보는 권한자 외 비공개, 문의 시 공식 절차로 안내',
+                                          '모든 업체에 동일 기준으로 답변되도록 공식 질의 채널로만 접수받기']},
                'quiz': [{'type': 'mcq',
                          'code': 'FT-1',
                          'score': 35,
@@ -761,14 +781,12 @@ SCENARIOS = {'subcontracting': {'title': '🚜 하도급의 계곡',
                         {'type': 'text',
                          'code': 'FT-3',
                          'score': 30,
-                         'question': '거래처 제안을 거절하고 원칙을 안내하는 답변 문장을 짧게 작성해보세요. (원칙 + 대안 채널 안내 포함)',
-                         'sample_answer': '평가 관련 정보는 공정성을 위해 공식 공지 범위에서만 안내 가능합니다. 추가 문의는 지정된 접수창구로 요청해 주시면 동일 기준으로 '
-                                          '답변드리겠습니다.',
-                         'model_answer': '예시 답변: “입찰/평가 정보는 공정성 원칙에 따라 공개된 내용만 안내드릴 수 있습니다. 추가 문의는 공식 질의 채널로 접수해 주시면 '
-                                         '모든 업체에 동일 기준으로 회신하겠습니다.”',
-                         'rubric_keywords': {'원칙 설명': ['공정', '원칙', '공식', '기준', '규정'],
-                                             '거절 표현': ['어렵', '불가', '제공', '거절', '안내'],
-                                             '대안 제시': ['문의', '채널', '접수', '회신', '공개']}}]}}
+                         'question': '나는 입찰 준비 중 거래처로부터 평가 기준 세부내용이나 경쟁사 관련 정보를 알려 달라는 요청을 받았습니다. 이 상황에서 내가 원칙을 지키며 어떻게 대응할지 짧게 작성해보세요. (공정성 원칙 + 거절 + 공식 채널 안내 포함)',
+                         'sample_answer': '평가 관련 정보는 공정성을 위해 공개된 범위에서만 안내하겠습니다. 추가 문의는 공식 질의 채널로 접수하도록 안내하고 동일 기준으로 회신되도록 하겠습니다.',
+                         'model_answer': '예시 답변: “입찰/평가 정보는 공정성과 동일기회 원칙에 따라 공개된 내용만 안내하겠습니다. 비공개 정보나 경쟁사 관련 내용은 제공하지 않고, 추가 문의는 공식 질의 채널로 접수하도록 안내해 모든 업체에 동일 기준으로 회신되도록 처리하겠습니다.”',
+                         'rubric_keywords': {'공정성 원칙': {'keywords': ['공정', '동일', '공개', '원칙', '기준'], 'weight': 3, 'min_hits': 2},
+                                             '비공개 정보 거절': {'keywords': ['비공개', '경쟁사', '제공하지', '어렵', '불가', '거절'], 'weight': 4, 'min_hits': 2},
+                                             '공식 채널 안내': {'keywords': ['공식', '질의', '채널', '접수', '회신', '동일 기준'], 'weight': 3, 'min_hits': 2}}}]}}
 
 MCQ_SCORE = 10
 TEXT_SCORE = 10
@@ -798,7 +816,12 @@ def init_state():
         "quiz_progress": {},
         "attempt_counts": {},
         "attempt_history": [],
+        "training_attempt_id": "",
+        "training_attempt_round": 1,
         "show_conquer_fx": False,
+        "map_fx_done": False,
+        "map_celebrate_until": 0.0,
+        "map_celebrate_theme": None,
         "last_cleared_mission": None,
         "log_write_error": None,
         "played_final_fanfare": False,
@@ -809,6 +832,7 @@ def init_state():
         "employee_lookup_candidates": [],
         "employee_selected_record": None,
         "employee_lookup_modal_open": False,
+        "retry_offer": None,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -901,7 +925,14 @@ def mark_theme_complete_if_ready(m_key: str):
             st.session_state.completed.append(m_key)
             st.session_state.last_cleared_mission = m_key
             st.session_state.show_conquer_fx = True
-
+            st.session_state.map_fx_done = False
+            st.session_state.map_celebrate_theme = m_key
+            st.session_state.map_celebrate_until = float(time.time()) + 5.0
+            # 테마 정복 사운드 큐 (최종 정복은 fanfare 우선)
+            if len(st.session_state.completed) >= len(SCENARIO_ORDER):
+                queue_sfx("final")
+            else:
+                queue_sfx("conquer")
 # =========================================================
 # 5) 유틸 함수 (이미지 / 사운드 / 로그 / 평가)
 # =========================================================
@@ -923,17 +954,33 @@ def get_ending_image():
     return None
 
 
-def show_map_with_fade(map_path: Path, caption: str = None):
+def show_map_with_fade(map_path: Path, caption: str = None, celebrate: bool = False):
     if not map_path or not map_path.exists():
         st.warning("맵 이미지 파일을 찾을 수 없습니다.")
         return
     try:
         img_bytes = map_path.read_bytes()
         encoded = base64.b64encode(img_bytes).decode("utf-8")
+        pollen_html = ""
+        if celebrate:
+            pollen_positions = [
+                (8,18,6,0.0),(14,68,5,0.7),(22,35,7,1.2),(28,82,5,0.2),(35,12,6,0.9),
+                (42,58,5,1.6),(50,28,7,0.4),(57,76,6,1.1),(64,44,5,1.9),(72,16,6,0.5),
+                (79,62,7,1.4),(86,34,5,0.8),(18,50,4,1.8),(61,88,4,0.3),(74,92,4,1.5),
+                (10,90,4,0.6),(90,8,4,1.0),(46,6,4,1.7)
+            ]
+            dots = []
+            for top,left,size,delay in pollen_positions:
+                dots.append(
+                    f"<span class='pollen-dot' style='top:{top}%;left:{left}%;width:{size}px;height:{size}px;animation-delay:{delay}s;'></span>"
+                )
+            pollen_html = f"<div class='map-pollen-overlay'>{''.join(dots)}</div>"
+
         st.markdown(
             f"""
-            <div class="map-fade-wrap">
+            <div class="map-fade-wrap{' celebrate' if celebrate else ''}">
                 <img class="map-fade-img" src="data:image/png;base64,{encoded}" />
+                {pollen_html}
             </div>
             """,
             unsafe_allow_html=True
@@ -944,7 +991,6 @@ def show_map_with_fade(map_path: Path, caption: str = None):
         st.image(str(map_path), use_container_width=True)
         if caption:
             st.caption(caption)
-
 
 
 def resolve_bgm_path(bgm_key: str) -> Path | None:
@@ -1087,9 +1133,16 @@ def _normalize_log_row(raw: dict) -> dict:
         mk = str(clean.get("mission_key", "")).strip()
         clean["mission_title"] = SCENARIOS.get(mk, {}).get("title", mk)
 
+    # 새 컬럼 호환 (구버전 로그에는 없음)
+    if "training_attempt_id" not in clean:
+        clean["training_attempt_id"] = clean.get("session_id", "") or ""
+    if "attempt_round" not in clean or str(clean.get("attempt_round", "")).strip() == "":
+        clean["attempt_round"] = clean.get("attempt_round_total", 1) or 1
+
     norm = {k: clean.get(k, "") for k in LOG_FIELDNAMES}
+
     # 숫자형 컬럼 보정
-    for col in ["question_index", "awarded_score", "max_score", "attempt_no_for_mission"]:
+    for col in ["question_index", "awarded_score", "max_score", "attempt_no_for_mission", "attempt_round"]:
         v = norm.get(col, "")
         try:
             if v == "" or v is None:
@@ -1098,16 +1151,22 @@ def _normalize_log_row(raw: dict) -> dict:
                 norm[col] = int(float(v))
         except Exception:
             norm[col] = 0
+
     # 문자열 컬럼 보정
-    for col in ["timestamp", "employee_no", "name", "organization", "department", "mission_key", "mission_title", "question_code", "question_type", "question", "selected_or_text", "is_correct"]:
+    for col in [
+        "timestamp", "training_attempt_id", "employee_no", "name", "organization", "department",
+        "mission_key", "mission_title", "question_code", "question_type", "question", "selected_or_text", "is_correct"
+    ]:
         val = norm.get(col, "")
         if val is None:
             val = ""
         norm[col] = str(val)
+
     if not norm["organization"].strip():
         norm["organization"] = "미분류"
+    if norm["attempt_round"] <= 0:
+        norm["attempt_round"] = 1
     return norm
-
 
 
 def _read_log_rows_tolerant():
@@ -1237,7 +1296,7 @@ def _coerce_log_df(df: pd.DataFrame) -> pd.DataFrame:
             df[col] = ""
 
     # 문자열 컬럼 정리
-    for col in ["employee_no", "name", "organization", "department", "mission_key", "mission_title", "question_code", "question_type", "question", "selected_or_text", "is_correct"]:
+    for col in ["training_attempt_id", "employee_no", "name", "organization", "department", "mission_key", "mission_title", "question_code", "question_type", "question", "selected_or_text", "is_correct"]:
         df[col] = df[col].fillna("").astype(str)
 
     # 기관 보정
@@ -1259,7 +1318,7 @@ def _coerce_log_df(df: pd.DataFrame) -> pd.DataFrame:
     df["mission_title"] = df["mission_title"].fillna(mapped_titles).fillna("미상 테마").astype(str)
 
     # 숫자 컬럼
-    for col in ["awarded_score", "max_score", "attempt_no_for_mission"]:
+    for col in ["awarded_score", "max_score", "attempt_no_for_mission", "attempt_round"]:
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
 
     # 시간 컬럼
@@ -1580,6 +1639,8 @@ def append_attempt_log(mission_key: str, q_idx: int, q_type: str, payload: dict)
 
     row = _normalize_log_row({
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "training_attempt_id": st.session_state.get("training_attempt_id", ""),
+        "attempt_round": st.session_state.get("training_attempt_round", 1),
         "employee_no": user.get("employee_no", ""),
         "name": user.get("name", ""),
         "organization": user.get("org", ""),
@@ -1610,7 +1671,70 @@ def append_attempt_log(mission_key: str, q_idx: int, q_type: str, payload: dict)
     except Exception as e:
         st.session_state.log_write_error = str(e)
 
+_TEXT_KEYWORD_SYNONYM_MAP = {
+    "서면": ["문서", "서류", "계약서", "발주서", "합의서", "기록"],
+    "서면계약": ["계약서", "서면 계약", "문서 계약"],
+    "기록": ["증빙", "보관", "남기", "기재"],
+    "공식": ["정식", "회사 채널", "공식채널", "정규"],
+    "채널": ["창구", "경로", "프로세스"],
+    "보고": ["알림", "공유", "상신", "신고"],
+    "승인": ["결재", "사전승인", "승인받"],
+    "거절": ["불가", "어렵", "제공하지", "응할수없", "응할 수 없", "거부"],
+    "중단": ["멈추", "보류", "정지", "중지"],
+    "재검토": ["다시 검토", "검토", "확인"],
+    "공정": ["공정성", "형평", "동일기회", "동일 기회"],
+    "동일": ["같은", "동일하게", "일관"],
+    "비공개": ["내부정보", "미공개", "민감정보"],
+    "질의": ["문의", "질문", "질의응답"],
+    "접수": ["등록", "남기", "신청"],
+    "회신": ["답변", "안내", "응답"],
+    "증빙": ["근거", "자료", "문서"],
+    "사전": ["미리", "선행"],
+    "점검": ["확인", "체크", "검토"],
+    "교육": ["안내", "고지", "공유"],
+    "분리": ["분리보관", "분리 저장", "접근통제"],
+    "최소": ["최소한", "필요한 범위", "필요 최소"],
+    "보관": ["저장", "유지", "관리"],
+    "파기": ["삭제", "폐기"],
+}
+
+def _normalize_korean_text_for_keyword_match(text: str) -> str:
+    s = str(text or "").lower()
+    s = re.sub(r"\s+", "", s)
+    s = re.sub(r"[^0-9a-zA-Z가-힣]", "", s)
+    return s
+
+def _expand_keyword_variants(keyword: str) -> list[str]:
+    kw = str(keyword or "").strip()
+    if not kw:
+        return []
+    variants = [kw]
+    base_norm = _normalize_korean_text_for_keyword_match(kw)
+    if base_norm:
+        variants.append(base_norm)
+    for canon, alts in _TEXT_KEYWORD_SYNONYM_MAP.items():
+        canon_norm = _normalize_korean_text_for_keyword_match(canon)
+        if kw == canon or base_norm == canon_norm or kw in alts:
+            variants.extend([canon])
+            variants.extend(alts)
+    if len(base_norm) >= 3:
+        variants.append(base_norm[: max(3, len(base_norm)-1)])
+    out = []
+    seen = set()
+    for v in variants:
+        v2 = str(v).strip()
+        if not v2:
+            continue
+        n = _normalize_korean_text_for_keyword_match(v2)
+        key = n or v2.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(v2)
+    return out
+
 def evaluate_text_answer(answer_text: str, rubric_keywords: dict, max_score: int):
+    """주관식 키워드 기반 평가 (가중치/최소일치수/유사표현 보정 지원)"""
     text = (answer_text or "").strip()
     if not text:
         return {
@@ -1618,28 +1742,121 @@ def evaluate_text_answer(answer_text: str, rubric_keywords: dict, max_score: int
             "found_groups": [],
             "missing_groups": list(rubric_keywords.keys()),
             "quality": "empty",
+            "score_breakdown": [],
+        }
+
+    lowered = text.lower()
+    compact = _normalize_korean_text_for_keyword_match(text)
+    group_specs = []
+    for group_name, spec in (rubric_keywords or {}).items():
+        if isinstance(spec, dict):
+            keywords = [str(k).strip() for k in spec.get("keywords", []) if str(k).strip()]
+            weight = float(spec.get("weight", 1))
+            min_hits = int(spec.get("min_hits", 1))
+        else:
+            keywords = [str(k).strip() for k in (spec or []) if str(k).strip()]
+            weight = 1.0
+            min_hits = 1
+
+        if min_hits < 1:
+            min_hits = 1
+        if weight <= 0:
+            weight = 1.0
+
+        expanded = []
+        for kw in keywords:
+            expanded.extend(_expand_keyword_variants(kw))
+        if not expanded:
+            expanded = keywords
+
+        dedup = []
+        seen_kw = set()
+        for kw in expanded:
+            key = _normalize_korean_text_for_keyword_match(kw) or str(kw).lower()
+            if key in seen_kw:
+                continue
+            seen_kw.add(key)
+            dedup.append(kw)
+
+        group_specs.append({
+            "name": str(group_name),
+            "keywords": dedup,
+            "weight": weight,
+            "min_hits": min_hits,
+        })
+
+    if not group_specs:
+        return {
+            "awarded_score": 0,
+            "found_groups": [],
+            "missing_groups": [],
+            "quality": "empty",
+            "score_breakdown": [],
         }
 
     found, missing = [], []
-    lowered = text.lower()
-    for group_name, keywords in rubric_keywords.items():
-        hit = any(str(k).lower() in lowered for k in keywords)
+    raw_total = 0.0
+    raw_earned = 0.0
+    breakdown = []
+
+    for g in group_specs:
+        matched = []
+        seen = set()
+        for kw in g["keywords"]:
+            kw_norm = _normalize_korean_text_for_keyword_match(kw)
+            kw_low = str(kw).lower().strip()
+            hit_now = False
+            if kw_norm and kw_norm in compact:
+                hit_now = True
+            elif kw_low and kw_low in lowered:
+                hit_now = True
+            if hit_now:
+                dedup_key = kw_norm or kw_low
+                if dedup_key not in seen:
+                    seen.add(dedup_key)
+                    matched.append(kw)
+        hit_count = len(matched)
+        hit = hit_count >= g["min_hits"]
+
+        raw_total += g["weight"]
         if hit:
-            found.append(group_name)
+            raw_earned += g["weight"]
+            found.append(g["name"])
+            earned_weight = g["weight"]
         else:
-            missing.append(group_name)
+            missing.append(g["name"])
+            earned_weight = 0.0
 
-    ratio = len(found) / max(len(rubric_keywords), 1)
+        breakdown.append({
+            "group": g["name"],
+            "weight": int(round(g["weight"])),
+            "earned": int(round(earned_weight)),
+            "matched": matched[:8],
+            "min_hits": g["min_hits"],
+            "hit_count": hit_count,
+        })
+
+    ratio = (raw_earned / raw_total) if raw_total else 0
     awarded = int(round(max_score * ratio))
-    if len(text) < 8 and awarded > 0:
-        awarded = max(0, awarded - 5)
 
-    quality = "good" if ratio >= 0.67 else "partial"
+    if len(text) < 12 and awarded > 0:
+        awarded = max(0, awarded - max(1, int(round(max_score * 0.2))))
+    elif len(text) < 25 and awarded > 0 and ratio >= 0.5:
+        awarded = max(0, awarded - 1)
+
+    if ratio >= 0.8:
+        quality = "good"
+    elif ratio >= 0.45:
+        quality = "partial"
+    else:
+        quality = "needs_more"
+
     return {
         "awarded_score": awarded,
         "found_groups": found,
         "missing_groups": missing,
         "quality": quality,
+        "score_breakdown": breakdown,
     }
 
 
@@ -1661,6 +1878,182 @@ def reset_game():
 
 
 
+
+def _derive_attempt_uid_series(df: pd.DataFrame) -> pd.Series:
+    if df is None or df.empty:
+        return pd.Series(dtype=str)
+    tmp = df.copy()
+    if "training_attempt_id" not in tmp.columns:
+        tmp["training_attempt_id"] = ""
+    base_id = tmp["training_attempt_id"].fillna("").astype(str).str.strip()
+    if "learner_id" not in tmp.columns:
+        if "employee_no" not in tmp.columns:
+            tmp["employee_no"] = ""
+        if "organization" not in tmp.columns:
+            tmp["organization"] = "미분류"
+        if "name" not in tmp.columns:
+            tmp["name"] = "이름미상"
+        tmp["learner_id"] = tmp["employee_no"].astype(str).where(
+            tmp["employee_no"].astype(str).str.strip() != "",
+            tmp["organization"].astype(str) + "|" + tmp["name"].astype(str)
+        )
+    legacy_id = "legacy|" + tmp["learner_id"].astype(str)
+    return base_id.where(base_id != "", legacy_id)
+
+def _summarize_user_attempts(employee_no: str, name: str, organization: str):
+    total_questions = sum(len(SCENARIOS[k]["quiz"]) for k in SCENARIO_ORDER)
+    df, err = _load_log_df()
+    if err or df is None or df.empty:
+        return {"attempts_started": 0, "completed_attempts": 0, "best_score": 0, "last_score": 0, "attempts_df": pd.DataFrame()}
+
+    df = _coerce_log_df(df)
+    if df.empty:
+        return {"attempts_started": 0, "completed_attempts": 0, "best_score": 0, "last_score": 0, "attempts_df": pd.DataFrame()}
+
+    employee_no = str(employee_no or "").strip()
+    name = str(name or "").strip()
+    organization = str(organization or "").strip() or "미분류"
+
+    if employee_no:
+        u = df[df["employee_no"].astype(str).str.strip() == employee_no].copy()
+    else:
+        u = df[
+            (df["name"].astype(str).str.strip() == name) &
+            (df["organization"].astype(str).str.strip().replace("", "미분류") == organization)
+        ].copy()
+
+    if u.empty:
+        return {"attempts_started": 0, "completed_attempts": 0, "best_score": 0, "last_score": 0, "attempts_df": pd.DataFrame()}
+
+    u["organization"] = u["organization"].fillna("").astype(str).str.strip().replace("", "미분류")
+    u["employee_no"] = u["employee_no"].fillna("").astype(str).str.strip()
+    u["name"] = u["name"].fillna("").astype(str).str.strip()
+    u["learner_id"] = u["employee_no"].where(u["employee_no"] != "", u["organization"] + "|" + u["name"])
+    u["attempt_uid"] = _derive_attempt_uid_series(u)
+    u = u.sort_values(["timestamp"], ascending=True)
+
+    latest_per_q_attempt = u.drop_duplicates(subset=["attempt_uid", "question_code"], keep="last")
+    per_attempt = (
+        latest_per_q_attempt.groupby(["attempt_uid"], as_index=False)
+        .agg(
+            answered_questions=("question_code", "nunique"),
+            score_sum=("awarded_score", "sum"),
+            last_activity=("timestamp", "max"),
+            attempt_round_logged=("attempt_round", "max"),
+        )
+    )
+    per_attempt["total_score"] = pd.to_numeric(per_attempt["score_sum"], errors="coerce").fillna(0.0)
+    per_attempt.loc[per_attempt["answered_questions"] > 0, "total_score"] += PARTICIPATION_SCORE
+    per_attempt["total_score"] = per_attempt["total_score"].round(0).astype(int)
+    per_attempt["is_completed"] = per_attempt["answered_questions"] >= total_questions
+    per_attempt = per_attempt.sort_values(["last_activity", "total_score"], ascending=[True, True]).reset_index(drop=True)
+
+    return {
+        "attempts_started": int(per_attempt["attempt_uid"].nunique()),
+        "completed_attempts": int(per_attempt["is_completed"].sum()),
+        "best_score": int(per_attempt["total_score"].max()) if not per_attempt.empty else 0,
+        "last_score": int(per_attempt.iloc[-1]["total_score"]) if not per_attempt.empty else 0,
+        "attempts_df": per_attempt,
+    }
+
+def _set_retry_offer(user_info: dict, completed_attempts: int, context: str = "intro"):
+    st.session_state.retry_offer = {
+        "user_info": dict(user_info or {}),
+        "completed_attempts": int(completed_attempts or 0),
+        "context": context,
+        "created_at": time.time(),
+    }
+
+def _clear_retry_offer():
+    st.session_state.retry_offer = None
+
+def start_training_attempt_session(user_info: dict, attempt_round: int, *, skip_to_stage: str = "map"):
+    user_info = dict(user_info or {})
+    keep_keys = {
+        "admin_authed": st.session_state.get("admin_authed", False),
+        "bgm_enabled": st.session_state.get("bgm_enabled", True),
+        "audio_debug": st.session_state.get("audio_debug", False),
+        "employee_lookup_candidates": st.session_state.get("employee_lookup_candidates", []),
+        "employee_selected_record": st.session_state.get("employee_selected_record"),
+        "employee_lookup_modal_open": False,
+    }
+
+    st.session_state.user_info = {
+        "employee_no": str(user_info.get("employee_no", "")).strip(),
+        "name": str(user_info.get("name", "")).strip(),
+        "org": str(user_info.get("org", user_info.get("organization", ""))).strip() or "미분류",
+    }
+    st.session_state.stage = skip_to_stage
+    st.session_state.current_mission = None
+    st.session_state.completed = []
+    st.session_state.mission_scores = {}
+    st.session_state.score = 0
+    st.session_state.participation_awarded = False
+    st.session_state.participation_score = 0
+    st.session_state.quiz_progress = {}
+    st.session_state.attempt_counts = {}
+    st.session_state.attempt_history = []
+    st.session_state.show_conquer_fx = False
+    st.session_state.map_fx_done = False
+    st.session_state.last_cleared_mission = None
+    st.session_state.map_celebrate_until = 0.0
+    st.session_state.map_celebrate_theme = None
+    st.session_state.log_write_error = None
+    st.session_state.played_final_fanfare = False
+    st.session_state.retry_offer = None
+    st.session_state.training_attempt_round = int(max(1, attempt_round))
+    st.session_state.training_attempt_id = f"run-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8]}"
+
+    for k, v in keep_keys.items():
+        st.session_state[k] = v
+
+    award_participation_points_if_needed()
+
+def render_retry_offer_box(context: str):
+    offer = st.session_state.get("retry_offer")
+    if not offer or offer.get("context") != context:
+        return
+
+    user = offer.get("user_info", {})
+    completed_attempts = int(offer.get("completed_attempts", 0) or 0)
+    next_round = completed_attempts + 1
+    max_attempts = 3
+    remaining_after = max(0, max_attempts - next_round)
+
+    if completed_attempts >= max_attempts:
+        st.error("이미 최대 참여 횟수(총 3회)를 모두 사용했습니다. 관리자에게 문의해주세요.")
+        return
+
+    name = html.escape(str(user.get("name", "참가자")))
+    org = html.escape(str(user.get("org", user.get("organization", "")) or "미분류"))
+
+    if next_round >= max_attempts:
+        title = "⚠️ 마지막 재도전 안내"
+        desc = "이번이 마지막 기회입니다. 충분히 학습한 뒤 집중해서 도전하세요. 더 높은 점수를 받으면 기관 누적/평균 점수에도 자동으로 반영됩니다."
+    else:
+        title = "🔄 재참여(재도전) 안내"
+        desc = "점수가 아쉽더라도 반복 참여는 제한됩니다. 재참여는 최대 2회까지 가능하며, 더 높은 점수를 받은 회차가 기관 누적/평균 점수에 자동 반영됩니다."
+
+    st.markdown(
+        f"""
+        <div class="retry-offer-card">
+          <div class="retry-offer-title">{title}</div>
+          <div class="retry-offer-body"><b>{name}</b> ({org}) · 현재 완료 회차 <b>{completed_attempts}회</b> / 최대 <b>{max_attempts}회</b></div>
+          <div class="retry-offer-desc">{desc}</div>
+          <div class="retry-offer-note">선택 시 메인 화면을 건너뛰고 Stage 1부터 새 회차로 바로 시작합니다. (남은 재도전 기회: {remaining_after}회)</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    c1, c2 = st.columns([1, 1], gap="large")
+    with c1:
+        if st.button("✅ 예, 다시 도전할게요", key=f"retry_yes_{context}", use_container_width=True):
+            start_training_attempt_session(user, next_round, skip_to_stage="map")
+            st.rerun()
+    with c2:
+        if st.button("아니오", key=f"retry_no_{context}", use_container_width=True):
+            _clear_retry_offer()
+            st.rerun()
 
 def _load_log_df():
     """
@@ -1695,26 +2088,15 @@ def _load_log_df():
 def _build_participant_snapshot(df: pd.DataFrame):
     df = df.copy()
 
-    # 기본 컬럼 보정
-    if "organization" not in df.columns:
-        if "department" in df.columns:
-            df["organization"] = df["department"]
-        else:
-            df["organization"] = "미분류"
+    for c, default in [("organization", "미분류"), ("employee_no", ""), ("name", "이름미상"), ("department", "")]:
+        if c not in df.columns:
+            df[c] = default
     df["organization"] = df["organization"].fillna("").astype(str).str.strip().replace("", "미분류")
-
-    if "employee_no" not in df.columns:
-        df["employee_no"] = ""
     df["employee_no"] = df["employee_no"].fillna("").astype(str).str.strip()
-
-    if "name" not in df.columns:
-        df["name"] = "이름미상"
     df["name"] = df["name"].fillna("").astype(str).str.strip().replace("", "이름미상")
+    df["department"] = df["department"].fillna("").astype(str)
 
-    if "department" not in df.columns:
-        df["department"] = ""
-
-    for col in ["awarded_score", "max_score", "question_index"]:
+    for col in ["awarded_score", "max_score", "question_index", "attempt_round"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
         else:
@@ -1730,100 +2112,120 @@ def _build_participant_snapshot(df: pd.DataFrame):
             df["question_code"] = df["mission_key"].astype(str) + "_Q" + df["question_index"].astype(int).astype(str)
         else:
             df["question_code"] = "Q?"
-
     if "mission_key" not in df.columns:
-        # question_code 기반으로 복원 시도
         df["mission_key"] = df["question_code"].astype(str).str.split("_Q").str[0]
 
+    if "training_attempt_id" not in df.columns:
+        df["training_attempt_id"] = ""
+    df["training_attempt_id"] = df["training_attempt_id"].fillna("").astype(str).str.strip()
+
     df["learner_id"] = df["employee_no"].where(df["employee_no"].str.strip() != "", df["organization"] + "|" + df["name"])
+    df["attempt_uid"] = _derive_attempt_uid_series(df)
 
-    # 최신 제출 기준 문항 스냅샷(문항별 중복 제거)
     df_sorted = df.sort_values(["timestamp"], ascending=True)
-    latest_per_q = df_sorted.drop_duplicates(subset=["learner_id", "question_code"], keep="last")
+    latest_per_q_attempt = df_sorted.drop_duplicates(subset=["learner_id", "attempt_uid", "question_code"], keep="last")
 
-    # 총 문항 수 / 테마별 문항 수
     total_questions = sum(len(SCENARIOS[k]["quiz"]) for k in SCENARIO_ORDER)
     theme_question_counts = {k: len(SCENARIOS[k]["quiz"]) for k in SCENARIO_ORDER}
 
-    # 참여자별 기본 집계
-    attempts_by_user = (
-        df.groupby(["learner_id", "employee_no", "organization", "name"], as_index=False)
-          .agg(
-              total_attempts=("question_code", "count"),
-              last_activity=("timestamp", "max"),
-          )
-    )
-
-    score_by_user = (
-        latest_per_q.groupby(["learner_id"], as_index=False)
-        .agg(
-            total_score=("awarded_score", "sum"),
-            answered_questions=("question_code", "nunique"),
-        )
-    )
-
-    # 참여자별 완료 테마 수 계산
     theme_counts = (
-        latest_per_q.groupby(["learner_id", "mission_key"], as_index=False)
+        latest_per_q_attempt.groupby(["learner_id", "attempt_uid", "mission_key"], as_index=False)
         .agg(answered_in_theme=("question_code", "nunique"))
     )
     theme_counts["theme_total_questions"] = theme_counts["mission_key"].map(theme_question_counts).fillna(999)
     theme_counts["theme_completed"] = theme_counts["answered_in_theme"] >= theme_counts["theme_total_questions"]
 
     completed_theme_cnt = (
-        theme_counts.groupby("learner_id", as_index=False)
+        theme_counts.groupby(["learner_id", "attempt_uid"], as_index=False)
         .agg(completed_themes=("theme_completed", "sum"))
     )
 
-    participants = attempts_by_user.merge(score_by_user, on="learner_id", how="left").merge(completed_theme_cnt, on="learner_id", how="left")
-    participants["total_score"] = participants["total_score"].fillna(0).astype(int) + PARTICIPATION_SCORE
-    participants["answered_questions"] = participants["answered_questions"].fillna(0).astype(int)
-    participants["completed_themes"] = participants["completed_themes"].fillna(0).astype(int)
-    participants["completion_rate_q"] = ((participants["answered_questions"] / max(total_questions, 1)) * 100).round(1)
-    participants["score_rate"] = ((participants["total_score"] / max(TOTAL_SCORE, 1)) * 100).round(1)
-    participants["is_completed"] = participants["answered_questions"] >= total_questions
-    participants["status"] = participants["is_completed"].map({True: "수료", False: "진행중"})
+    per_attempt = (
+        latest_per_q_attempt.groupby(["learner_id", "attempt_uid", "employee_no", "organization", "name"], as_index=False)
+        .agg(
+            raw_score=("awarded_score", "sum"),
+            answered_questions=("question_code", "nunique"),
+            last_activity=("timestamp", "max"),
+            latest_attempt_round=("attempt_round", "max"),
+        )
+    )
+    per_attempt = per_attempt.merge(completed_theme_cnt, on=["learner_id", "attempt_uid"], how="left")
+    per_attempt["completed_themes"] = per_attempt["completed_themes"].fillna(0).astype(int)
+    per_attempt["raw_score"] = pd.to_numeric(per_attempt["raw_score"], errors="coerce").fillna(0)
+    per_attempt["answered_questions"] = pd.to_numeric(per_attempt["answered_questions"], errors="coerce").fillna(0).astype(int)
+    per_attempt["total_score"] = per_attempt["raw_score"]
+    per_attempt.loc[per_attempt["answered_questions"] > 0, "total_score"] += PARTICIPATION_SCORE
+    per_attempt["total_score"] = per_attempt["total_score"].round(0).astype(int)
+    per_attempt["completion_rate_q"] = ((per_attempt["answered_questions"] / max(total_questions, 1)) * 100).round(1)
+    per_attempt["score_rate"] = ((per_attempt["total_score"] / max(TOTAL_SCORE, 1)) * 100).round(1)
+    per_attempt["is_completed"] = per_attempt["answered_questions"] >= total_questions
 
-    # 기관별 요약
+    attempt_meta = (
+        per_attempt.groupby(["learner_id"], as_index=False)
+        .agg(
+            attempts_started=("attempt_uid", "nunique"),
+            completed_attempts=("is_completed", "sum"),
+            last_activity_all=("last_activity", "max"),
+            best_score_any=("total_score", "max"),
+        )
+    )
+    submission_meta = (
+        df_sorted.groupby(["learner_id"], as_index=False)
+        .agg(total_attempts=("question_code", "count"))
+    )
+    attempt_meta = attempt_meta.merge(submission_meta, on="learner_id", how="left")
+
+    best_attempt = per_attempt.sort_values(
+        ["learner_id", "total_score", "is_completed", "answered_questions", "last_activity"],
+        ascending=[True, False, False, False, False]
+    ).drop_duplicates(subset=["learner_id"], keep="first")
+
+    participants = best_attempt.merge(attempt_meta, on="learner_id", how="left")
+    participants["completed_attempts"] = participants["completed_attempts"].fillna(0).astype(int)
+    participants["attempts_started"] = participants["attempts_started"].fillna(0).astype(int)
+    participants["is_completed"] = participants["is_completed"].fillna(False).astype(bool)
+    participants["status"] = participants["is_completed"].map({True: "수료(최고점 반영)", False: "진행중(최고점 기준)"})
+
     org_summary = (
         participants.groupby("organization", as_index=False)
         .agg(
             participants=("learner_id", "nunique"),
             completed=("is_completed", "sum"),
+            cumulative_score=("total_score", "sum"),
             avg_score=("total_score", "mean"),
             avg_score_rate=("score_rate", "mean"),
             avg_completion_rate=("completion_rate_q", "mean"),
-            latest_activity=("last_activity", "max"),
+            latest_activity=("last_activity_all", "max"),
         )
     )
-    org_attempts = (
-        df.groupby("organization", as_index=False)
-          .agg(total_attempts=("question_code", "count"))
-    )
+    org_attempts = per_attempt.groupby("organization", as_index=False).agg(total_attempts=("attempt_uid", "nunique"))
     org_summary = org_summary.merge(org_attempts, on="organization", how="left")
+    for col in ["cumulative_score", "avg_score", "avg_score_rate", "avg_completion_rate", "total_attempts"]:
+        org_summary[col] = pd.to_numeric(org_summary[col], errors="coerce").fillna(0)
+    org_summary["cumulative_score"] = org_summary["cumulative_score"].round(0).astype(int)
     org_summary["avg_score"] = org_summary["avg_score"].round(1)
     org_summary["avg_score_rate"] = org_summary["avg_score_rate"].round(1)
     org_summary["avg_completion_rate"] = org_summary["avg_completion_rate"].round(1)
     org_summary["completion_rate"] = ((org_summary["completed"] / org_summary["participants"].replace(0, 1)) * 100).round(1)
-    org_summary = org_summary.sort_values(["avg_score", "participants"], ascending=[False, False]).reset_index(drop=True)
+    org_summary = org_summary.sort_values(
+        ["cumulative_score", "avg_score", "participants", "organization"],
+        ascending=[False, False, False, True]
+    ).reset_index(drop=True)
 
-    # 보기 좋은 참여자 테이블
     participants_view = participants.copy()
-    participants_view["last_activity"] = participants_view["last_activity"].dt.strftime("%Y-%m-%d %H:%M").fillna("-")
-    participants_view = participants_view.sort_values(["last_activity", "total_score"], ascending=[False, False])
+    participants_view["last_activity"] = pd.to_datetime(participants_view["last_activity"], errors="coerce").dt.strftime("%Y-%m-%d %H:%M").fillna("-")
+    participants_view["last_activity_all"] = pd.to_datetime(participants_view["last_activity_all"], errors="coerce").dt.strftime("%Y-%m-%d %H:%M").fillna("-")
+    participants_view = participants_view.sort_values(["total_score", "last_activity"], ascending=[False, False])
 
     return {
         "raw": df,
-        "latest_per_q": latest_per_q,
+        "latest_per_q": latest_per_q_attempt,
+        "per_attempt": per_attempt,
         "participants": participants,
         "participants_view": participants_view,
         "org_summary": org_summary,
         "total_questions": total_questions,
     }
-
-
-
-
 
 
 def render_intro_org_cumulative_board():
@@ -1968,6 +2370,46 @@ def render_intro_org_cumulative_board():
               box-shadow: 0 0 12px rgba(43,214,118,.35);
             }
             .org-rate-text{min-width:48px; text-align:right; font-weight:700; color:#EFFFF7; font-size:.86rem;}
+        .map-pollen-overlay{
+            position:absolute; inset:0; pointer-events:none; overflow:hidden;
+            border-radius:14px;
+        }
+        .map-pollen-overlay .pollen-dot{
+            position:absolute;
+            border-radius:50%;
+            background: radial-gradient(circle, rgba(255,244,169,.95) 0%, rgba(255,220,101,.55) 48%, rgba(255,220,101,0) 72%);
+            box-shadow:0 0 14px rgba(255,221,102,.35);
+            animation: pollenFloat 5s ease-in-out forwards;
+            opacity:0;
+        }
+        .map-fade-wrap.celebrate{
+            box-shadow: 0 0 0 1px rgba(255,227,130,.22), 0 10px 28px rgba(255,221,102,.12);
+        }
+        @keyframes pollenFloat{
+            0%{ transform:translateY(12px) scale(.85); opacity:0; }
+            10%{ opacity:.95; }
+            65%{ opacity:.88; }
+            100%{ transform:translateY(-42px) scale(1.18); opacity:0; }
+        }
+        .stage-clear-banner{ animation: stageClearPulse .9s ease-in-out 2; }
+        @keyframes stageClearPulse{
+            0%{ transform:scale(0.995); box-shadow:0 0 0 rgba(0,0,0,0); }
+            50%{ transform:scale(1.01); box-shadow:0 8px 18px rgba(59,130,246,.16); }
+            100%{ transform:scale(1); box-shadow:0 0 0 rgba(0,0,0,0); }
+        }
+        .retry-offer-card{
+            margin: 10px 0 10px 0;
+            padding: 14px 16px;
+            border-radius: 14px;
+            border:1px solid rgba(255,214,102,.35);
+            background: linear-gradient(180deg, rgba(38,31,10,.78), rgba(19,22,33,.88));
+            box-shadow: 0 8px 24px rgba(0,0,0,.22);
+            text-align: center;
+        }
+        .retry-offer-title{ color:#FFE7A0; font-weight:800; font-size:1.03rem; margin-bottom:6px; }
+        .retry-offer-body{ color:#F3F7FF; font-size:.94rem; margin-bottom:4px; }
+        .retry-offer-desc{ color:#DCE8FF; font-size:.90rem; line-height:1.45; margin-bottom:6px; }
+        .retry-offer-note{ color:#BFD1F6; font-size:.82rem; }
             </style>
             """,
             unsafe_allow_html=True,
@@ -2151,7 +2593,9 @@ def render_org_dashboard(compact: bool = False):
                 "avg_score": "평균 점수",
                 "avg_score_rate": "평균 점수율(%)",
                 "avg_completion_rate": "평균 진행률(%)",
-                "total_attempts": "누적 제출 수",
+                "attempts_started": "참여 회차 수",
+        "completed_attempts": "완료 회차 수",
+        "total_attempts": "누적 제출 수",
                 "latest_activity": "최근 참여",
             })
             safe_dataframe(org_view, use_container_width=True, height=280 if compact else None)
@@ -2189,7 +2633,7 @@ def render_org_dashboard(compact: bool = False):
         "total_attempts": "누적 제출 수",
         "last_activity": "최근 참여",
     })
-    show_cols = ["사번", "기관", "이름", "상태", "총점", "점수율(%)", "완료 테마수", "제출 문항수", "문항 진행률(%)", "누적 제출 수", "최근 참여"]
+    show_cols = ["사번", "기관", "이름", "상태", "총점", "점수율(%)", "참여 회차 수", "완료 회차 수", "완료 테마수", "제출 문항수", "문항 진행률(%)", "누적 제출 수", "최근 참여"]
     safe_dataframe(p_view[show_cols], use_container_width=True)
 
     csv_bytes = p_view[show_cols].to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
@@ -2388,62 +2832,43 @@ def render_admin_question_stats():
 # =========================================================
 
 def render_conquer_fx_if_needed():
+    if not st.session_state.get("show_conquer_fx", False):
+        return
     if st.session_state.get("map_fx_done", False):
         return
 
-    stage = int(st.session_state.get("guardian_stage", 0))
-    pending_stage = st.session_state.get("pending_map_fx_stage", None)
-    pending_theme = st.session_state.get("pending_map_fx_theme", None)
+    pending_theme = st.session_state.get("last_cleared_mission")
+    is_final_clear = len(st.session_state.get("completed", [])) >= len(SCENARIO_ORDER)
 
-    if pending_stage is None:
-        return
-
-    try:
-        pending_stage = int(pending_stage)
-    except Exception:
-        pending_stage = stage
-
-    # stage 값이 이미 반영된 상태 기준으로 처리
-    is_final_clear = pending_stage >= FINAL_STAGE
-
-    # 시각 효과는 유지하되, 같은 지도를 중복 렌더링하지 않도록 여기서는 텍스트/토스트만 표시
     if is_final_clear:
-        try:
-            st.toast("🏁 최종 테마 정복 완료!", icon="🎉")
-        except Exception:
-            pass
+        msg = "🏁 최종 테마 정복 완료!"
+        style = "border:1px solid rgba(250,204,21,.45); background: linear-gradient(90deg, rgba(250,204,21,.14), rgba(59,130,246,.10)); color:#FFF6D8;"
     else:
         title = SCENARIOS.get(str(pending_theme), {}).get("title", "테마")
         title_plain = title.split(" ", 1)[1] if " " in title else title
-        st.markdown(
-            f"""
-            <div style="
-                margin: 6px 0 12px 0;
-                padding: 10px 14px;
-                border-radius: 12px;
-                border: 1px solid rgba(74, 222, 128, .35);
-                background: linear-gradient(90deg, rgba(16,185,129,.12), rgba(59,130,246,.08));
-                color: #EAFBF1;
-                font-weight: 700;
-            ">
-                ✨ {html.escape(title_plain)} 정복 완료! 가디언 맵이 업데이트되었습니다.
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        try:
-            st.toast("가디언 맵 업데이트!", icon="🗺️")
-        except Exception:
-            pass
+        msg = f"✨ {html.escape(title_plain)} 정복 완료! 가디언 맵이 업데이트되었습니다."
+        style = "border:1px solid rgba(74, 222, 128, .35); background: linear-gradient(90deg, rgba(16,185,129,.12), rgba(59,130,246,.08)); color:#EAFBF1;"
 
+    st.markdown(
+        f"""
+        <div class="stage-clear-banner" style="margin:6px 0 12px 0; padding:10px 14px; border-radius:12px; {style} font-weight:700;">
+            {msg}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    try:
+        st.toast("🏁 최종 테마 정복 완료!" if is_final_clear else "가디언 맵 업데이트!", icon="🎉" if is_final_clear else "🗺️")
+    except Exception:
+        pass
     try:
         st.balloons()
     except Exception:
         pass
 
     st.session_state.map_fx_done = True
-    st.session_state.pop("pending_map_fx_stage", None)
-    st.session_state.pop("pending_map_fx_theme", None)
+    st.session_state.show_conquer_fx = False
 
 
 def render_guardian_map():
@@ -2453,8 +2878,9 @@ def render_guardian_map():
     cleared_cnt = len(st.session_state.get("completed", []))
     stage_idx = min(cleared_cnt, 3)
 
+    celebrate = float(st.session_state.get("map_celebrate_until", 0) or 0) > float(time.time())
     if map_img:
-        show_map_with_fade(map_img, caption=f"현재 맵 단계: world_map_{stage_idx}.png")
+        show_map_with_fade(map_img, caption=f"현재 맵 단계: world_map_{stage_idx}.png", celebrate=celebrate)
     else:
         st.warning("맵 이미지가 없습니다. world_map_0~3.png 경로를 확인해주세요.")
         return
@@ -2650,6 +3076,12 @@ def render_text_question(m_key: str, q_idx: int, q_data: dict):
         found_text = ", ".join(res["found_groups"]) if res["found_groups"] else "없음"
         missing_text = ", ".join(res["missing_groups"]) if res["missing_groups"] else "없음"
 
+        breakdown_lines = []
+        for item in res.get("score_breakdown", []) or []:
+            matched = ", ".join(item.get("matched", [])) if item.get("matched") else "미반영"
+            breakdown_lines.append(f"• {item.get('group')} ({item.get('earned', 0)}/{item.get('weight', 0)}점): {matched}")
+        breakdown_html = "<br>".join(html.escape(x) for x in breakdown_lines) if breakdown_lines else ""
+
         st.markdown(
             f"""
             <div class='card'>
@@ -2659,6 +3091,7 @@ def render_text_question(m_key: str, q_idx: int, q_data: dict):
               <div><b>평가 결과</b> · {quality_badge}</div>
               <div style="margin-top:6px;"><b>잘 반영한 요소</b>: {found_text}</div>
               <div style="margin-top:4px;"><b>보완 포인트</b>: {missing_text}</div>
+              {f"<div style='margin-top:8px;'><b>세부 배점</b><br>{breakdown_html}</div>" if breakdown_html else ""}
             </div>
             """,
             unsafe_allow_html=True,
@@ -2743,6 +3176,7 @@ def render_text_question(m_key: str, q_idx: int, q_data: dict):
             "found_groups": eval_res["found_groups"],
             "missing_groups": eval_res["missing_groups"],
             "quality": eval_res["quality"],
+            "score_breakdown": eval_res.get("score_breakdown", []),
         }
         submissions[q_idx] = result
 
@@ -2976,18 +3410,24 @@ if st.session_state.stage == "intro":
         if st.button("모험 시작하기", use_container_width=True):
             emp_no = str(selected_emp.get("employee_no", "")).strip()
             emp_name = str(selected_emp.get("name", "")).strip()
-            emp_org = str(selected_emp.get("organization", "")).strip()
-            if emp_name and emp_no:
-                st.session_state.user_info = {
-                    "employee_no": emp_no,
-                    "name": emp_name,
-                    "org": emp_org,
-                }
-                award_participation_points_if_needed()
-                st.session_state.stage = "map"
-                st.rerun()
+            emp_org = str(selected_emp.get("organization", "")).strip() or "미분류"
+            if emp_name:
+                user_info = {"employee_no": emp_no, "name": emp_name, "org": emp_org}
+                hist = _summarize_user_attempts(emp_no, emp_name, emp_org)
+                completed_attempts = int(hist.get("completed_attempts", 0) or 0)
+
+                if completed_attempts >= 3:
+                    st.error("이 참가자는 최대 참여 횟수(총 3회)를 모두 사용했습니다. 관리자에게 문의해주세요.")
+                elif completed_attempts >= 1:
+                    _set_retry_offer(user_info, completed_attempts, context="intro")
+                    st.rerun()
+                else:
+                    start_training_attempt_session(user_info, attempt_round=1, skip_to_stage="map")
+                    st.rerun()
             else:
                 st.warning("참가자 확인 정보를 다시 선택해주세요.")
+
+    render_retry_offer_box("intro")
 
 elif st.session_state.stage == "map":
     render_top_spacer()
@@ -3168,7 +3608,23 @@ elif st.session_state.stage == "ending":
             st.session_state.stage = "map"
             st.rerun()
     with c2:
-        if st.button("🔄 처음부터 다시", use_container_width=True):
-            reset_game()
+        if st.button("🔄 다시 도전", use_container_width=True):
+            u = st.session_state.get("user_info", {}) or {}
+            emp_no = str(u.get("employee_no", "")).strip()
+            emp_name = str(u.get("name", "")).strip()
+            emp_org = str(u.get("org", "")).strip() or "미분류"
+            if not emp_name:
+                st.warning("참가자 정보가 없어 처음 화면으로 이동합니다.")
+                reset_game()
+            else:
+                hist = _summarize_user_attempts(emp_no, emp_name, emp_org)
+                completed_attempts = int(hist.get("completed_attempts", 0) or 0)
+                if completed_attempts >= 3:
+                    st.error("이미 최대 참여 횟수(총 3회)를 모두 사용했습니다.")
+                else:
+                    _set_retry_offer({"employee_no": emp_no, "name": emp_name, "org": emp_org}, completed_attempts, context="ending")
+                    st.rerun()
+
+    render_retry_offer_box("ending")
 else:
     st.error("알 수 없는 stage입니다. 앱을 다시 시작해주세요.")
