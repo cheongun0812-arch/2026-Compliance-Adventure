@@ -6,6 +6,8 @@ import io
 import time
 import base64
 import pandas as pd
+import streamlit.components.v1 as components
+import os
 
 # =========================================================
 # 1) 페이지 설정 / 스타일
@@ -98,6 +100,65 @@ div.stButton > button:first-child:hover {
     animation: mapFadeIn 0.28s ease-out;
     display: block;
 }
+
+/* 대시보드 카드 */
+.dash-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0,1fr));
+    gap: 10px;
+    margin: 8px 0 12px 0;
+}
+.dash-card {
+    background: linear-gradient(135deg, #141B24, #10151D);
+    border: 1px solid #2B3140;
+    border-radius: 14px;
+    padding: 12px 14px;
+}
+.dash-card .label {
+    font-size: 0.8rem;
+    color: #B7C4D8;
+    margin-bottom: 4px;
+}
+.dash-card .value {
+    font-size: 1.15rem;
+    font-weight: 800;
+    color: #F5F7FA;
+}
+.rank-card {
+    background: #131922;
+    border: 1px solid #2B3140;
+    border-radius: 12px;
+    padding: 10px 12px;
+    margin-bottom: 8px;
+}
+.rank-title {
+    font-weight: 700;
+    margin-bottom: 6px;
+}
+.rank-meta {
+    color: #B7C4D8;
+    font-size: 0.82rem;
+    margin-top: 4px;
+}
+.rank-bar {
+    width: 100%;
+    height: 8px;
+    border-radius: 999px;
+    background: #202938;
+    overflow: hidden;
+}
+.rank-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #00C853, #55EFC4);
+}
+.admin-lock {
+    background: linear-gradient(135deg, #1E1A10, #17120B);
+    border: 1px solid #7A5C21;
+    border-radius: 14px;
+    padding: 14px;
+    margin-bottom: 10px;
+}
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -132,8 +193,30 @@ SFX = {
 THEME_ICONS = {
     "subcontracting": "🚜",
     "security": "🔐",
-    "fairtrade": "🏰",
+    "fairtrade": "🛡️",
 }
+
+
+ORG_OPTIONS = [
+    "사업총괄",
+    "강원본부",
+    "강북본부",
+    "경영총괄",
+    "강남본부",
+    "서부본부",
+    "품질지원단",
+]
+
+BGM = {
+    "intro": BASE_DIR / "bgm_intro.mp3",
+    "map": BASE_DIR / "bgm_map.mp3",
+    "subcontracting": BASE_DIR / "bgm_subcontracting.mp3",
+    "security": BASE_DIR / "bgm_security.mp3",
+    "fairtrade": BASE_DIR / "bgm_fairtrade.mp3",
+    "ending": BASE_DIR / "bgm_final.mp3",
+}
+
+ADMIN_PASSWORD = os.environ.get("COMPLIANCE_ADMIN_PASSWORD", "admin2026")
 
 # =========================================================
 # 3) 콘텐츠 데이터 (브리핑 + 퀴즈)
@@ -287,78 +370,77 @@ SCENARIOS = {
         ]
     },
     "fairtrade": {
-        "title": "🏰 공정의 성",
-        "territory_name": "공정의 성",
+        "title": "🛡️ 반부패의 성",
+        "territory_name": "반부패의 성",
         "briefing": {
-            "title": "공정거래 기본 원칙 브리핑",
-            "summary": "경쟁사와 가격·입찰·물량 등 경쟁정보를 맞추는 행위는 담합 리스크가 큽니다. 애매한 대화라도 즉시 선을 긋고 보고하는 것이 안전합니다.",
+            "title": "반부패(재산상 이익) 기본 원칙 브리핑",
+            "summary": "업무 관련자에게 금품, 상품권, 편의 제공 등 재산상 이익을 받거나 요구하는 행위는 반부패 리스크가 큽니다. 애매한 경우에도 먼저 수수하지 말고 즉시 보고/상담하는 것이 안전합니다.",
             "red_flags": [
-                "입찰가/제안조건 공유 제안",
-                "‘서로 손해보지 않게 맞추자’는 표현",
-                "경쟁사와 비공식 정보 교환"
+                "업무 협력사/이해관계자가 상품권·현금성 선물을 제안",
+                "‘작은 성의’라며 개인 계좌·개인 연락처로 전달 시도",
+                "승인/평가/계약 직전·직후에 금품 또는 편의 제공 제안"
             ],
             "checklist": [
-                "가격·입찰 관련 대화 즉시 중단",
-                "거절 의사 명확히 표현",
-                "내부 보고 및 기록 남기기"
+                "금품·상품권·현금성 이익은 원칙적으로 수수 금지",
+                "즉시 정중히 거절하고, 대화/정황을 기록",
+                "상급자·감사/준법 담당자에게 보고 및 상담"
             ],
-            "keywords": ["담합", "입찰가", "거절", "보고"]
+            "keywords": ["재산상 이익", "금품 수수 금지", "거절", "보고"]
         },
         "quiz": [
             {
                 "type": "mcq",
-                "question": "경쟁사가 식사 자리에서 ‘이번 입찰가는 서로 맞추자’고 제안했습니다. 가장 적절한 대응은?",
+                "question": "계약이 막 완료된 후 협력사 담당자가 감사의 의미라며 모바일 상품권을 보내왔습니다. 가장 적절한 대응은?",
                 "options": [
-                    "이번만 비공식적으로 맞춰준다",
-                    "일단 듣기만 하고 나중에 생각한다",
-                    "즉시 거절하고 관련 대화를 중단한다",
-                    "회사에 유리하면 일부만 공유한다"
+                    "소액이므로 받는다",
+                    "개인적으로 받고 외부에 알리지 않는다",
+                    "정중히 거절하고 관련 사실을 내부에 보고한다",
+                    "이번만 받고 다음부터 조심한다"
                 ],
                 "answer": 2,
                 "score": 30,
                 "choice_feedback": {
-                    0: "비공식 제안이라도 담합 리스크는 동일하게 발생합니다.",
-                    1: "‘듣기만 한 것’도 상황에 따라 문제 소지가 될 수 있습니다.",
-                    2: "정답입니다. 즉시 거절 + 대화 중단이 기본 대응입니다.",
-                    3: "일부 공유도 경쟁정보 교환에 해당할 수 있습니다."
+                    0: "금액이 작아도 업무 관련 이해관계자에게 받는 재산상 이익은 리스크가 있습니다.",
+                    1: "비공개 수수는 사후에 더 큰 문제로 이어질 수 있습니다.",
+                    2: "정답입니다. 수수하지 않고 거절 + 내부 보고가 기본 대응입니다.",
+                    3: "‘이번만’은 반복 위험을 키우고 기준을 무너뜨립니다."
                 },
-                "explain": "핵심은 애매하게 넘기지 않고, 선을 분명히 긋는 것입니다. 필요 시 내부 보고까지 이어져야 합니다.",
-                "wrong_extra": "공정거래 이슈는 개인 판단보다 회사 전체 리스크로 확산되기 쉬워, 초기에 명확한 대응이 가장 중요합니다."
+                "explain": "핵심은 금액보다 ‘업무 관련성’입니다. 이해관계자와의 관계에서 금품·상품권 수수는 공정성 훼손 및 반부패 이슈로 이어질 수 있어 거절 및 보고가 원칙입니다.",
+                "wrong_extra": "실무에서는 ‘감사 표시’라는 표현으로 제안되는 경우가 많습니다. 표현보다 관계와 시점(계약/평가 전후)을 기준으로 판단하세요."
             },
             {
                 "type": "mcq",
-                "question": "아래 중 공정거래 리스크가 가장 큰 대화 주제는 무엇인가요?",
+                "question": "업무 상대방이 ‘현금은 아니고 식사/골프/차량 지원 같은 편의 제공인데 괜찮지 않냐’고 말합니다. 가장 적절한 판단은?",
                 "options": [
-                    "업계 행사 일정 공유",
-                    "일반적인 기술 트렌드 토론",
-                    "입찰 가격/물량/제안조건 조율",
-                    "공개된 보도자료 내용 확인"
+                    "현금이 아니므로 문제가 없다",
+                    "상대가 먼저 제안했으니 괜찮다",
+                    "편의 제공도 재산상 이익이 될 수 있어 수수하지 않고 기준을 확인한다",
+                    "개인 시간에 받으면 업무와 무관하다"
                 ],
                 "answer": 2,
                 "score": 30,
                 "choice_feedback": {
-                    0: "행사 일정 공유는 일반적으로 위험도가 낮습니다.",
-                    1: "기술 트렌드 일반론은 보통 허용 범주입니다(구체 경쟁정보 제외).",
-                    2: "정답입니다. 가격·물량·조건 조율은 담합 리스크가 큽니다.",
-                    3: "공개된 정보 확인은 상대적으로 위험도가 낮습니다."
+                    0: "재산상 이익은 현금만 의미하지 않습니다.",
+                    1: "상대 제안 여부와 무관하게 수수 리스크는 발생할 수 있습니다.",
+                    2: "정답입니다. 편의 제공도 재산상 이익에 해당할 수 있어 원칙적으로 거절·확인이 필요합니다.",
+                    3: "개인 시간이라도 업무 관련 이해관계자면 리스크가 남습니다."
                 },
-                "explain": "경쟁사와의 대화는 ‘공개 정보 범위’를 넘지 않도록 특히 주의해야 합니다.",
-                "wrong_extra": "실무에서는 ‘업계 정보 교류’라는 명목으로 가격/조건 이야기가 섞이는 순간 위험해집니다."
+                "explain": "반부패 관점에서 재산상 이익에는 현금 외에도 상품권, 식사·접대, 편의 제공 등이 포함될 수 있습니다. 애매하면 받지 않고 기준 확인 및 보고가 우선입니다.",
+                "wrong_extra": "‘현금만 아니면 된다’는 오해가 가장 흔합니다. 실제로는 현금성/비현금성 모두 리스크가 될 수 있습니다."
             },
             {
                 "type": "text",
-                "question": "경쟁사 제안을 거절하는 짧은 답변 문장을 작성해보세요. (거절 + 대화 중단 + 준법 의식 포함)",
+                "question": "업무 상대방의 금품/편의 제공 제안을 거절하고 내부 보고까지 포함하는 답변 문장을 1~2문장으로 작성해보세요.",
                 "score": 40,
                 "rubric_keywords": {
-                    "거절": ["거절", "불가", "할 수 없습니다", "어렵습니다"],
-                    "대화중단": ["입찰", "가격", "논의", "중단"],
-                    "준법/보고": ["준법", "규정", "보고", "내부"]
+                    "거절 표현": ["거절", "받을 수 없습니다", "어렵습니다", "불가"],
+                    "재산상 이익/원칙 언급": ["금품", "상품권", "편의", "재산상", "규정", "반부패"],
+                    "보고/기록 조치": ["보고", "공유", "담당", "준법", "감사", "기록"]
                 },
-                "model_answer": "입찰 가격이나 조건 관련 논의는 준법상 진행할 수 없습니다. 이 대화는 여기서 중단하겠습니다."
+                "model_answer": "업무 관련자에게 금품이나 편의 제공을 받는 것은 반부패 기준상 수수할 수 없어 정중히 거절드립니다. 관련 제안 내용은 내부 준법/감사 담당자에게 보고하고 기록하겠습니다."
             }
         ]
-    }
-}
+    },}
 
 DEPT_GUIDE = {
     "영업팀": "거래처 접점이 많아 접대·리베이트·공정거래 이슈에 특히 민감합니다.",
@@ -389,6 +471,10 @@ def init_state():
         "last_cleared_mission": None,
         "log_write_error": None,
         "played_final_fanfare": False,
+        "admin_authed": False,
+        "pending_sfx": None,
+        "bgm_enabled": True,
+        "audio_debug": False,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -471,22 +557,96 @@ def show_map_with_fade(map_path: Path, caption: str = None):
             st.caption(caption)
 
 
-def play_sfx(sound_path: Path):
-    if not sound_path or not sound_path.exists():
+
+def _audio_component_html(audio_b64: str, *, loop: bool = False, hidden_label: str = "audio"):
+    loop_attr = " loop" if loop else ""
+    html = f"""
+    <html>
+      <body style=\"margin:0; padding:0; background:transparent;\">
+        <audio id=\"{hidden_label}\" autoplay{loop_attr} style=\"display:none;\">
+          <source src=\"data:audio/mp3;base64,{audio_b64}\" type=\"audio/mpeg\">
+        </audio>
+      </body>
+    </html>
+    """
+    components.html(html, height=0, width=0)
+
+
+def queue_sfx(sfx_key: str):
+    st.session_state.pending_sfx = sfx_key
+
+
+def play_sfx_now(sfx_key: str):
+    sfx_path = SFX.get(sfx_key)
+    if not sfx_path or not sfx_path.exists():
         return
     try:
-        ext = sound_path.suffix.lower().replace(".", "") or "mp3"
-        audio_b64 = base64.b64encode(sound_path.read_bytes()).decode("utf-8")
-        st.markdown(
-            f"""
-            <audio autoplay style="display:none;">
-              <source src="data:audio/{ext};base64,{audio_b64}" type="audio/{ext}">
-            </audio>
-            """,
-            unsafe_allow_html=True,
-        )
+        sfx_b64 = base64.b64encode(sfx_path.read_bytes()).decode("utf-8")
+        _audio_component_html(sfx_b64, loop=False, hidden_label=f"sfx_now_{sfx_key}_{int(time.time()*1000)}")
     except Exception:
         pass
+
+
+def _resolve_bgm_key():
+    stage = st.session_state.get("stage", "intro")
+    current = st.session_state.get("current_mission")
+
+    if stage == "intro":
+        return "intro"
+    if stage == "map":
+        return "map"
+    if stage in ("briefing", "quiz") and current in SCENARIOS:
+        return current
+    if stage == "ending":
+        return "ending"
+    return "map"
+
+
+def render_audio_system():
+    # 1) Background music (loop)
+    if st.session_state.get("bgm_enabled", True):
+        bgm_key = _resolve_bgm_key()
+        bgm_path = BGM.get(bgm_key)
+        if bgm_path and bgm_path.exists():
+            try:
+                bgm_b64 = base64.b64encode(bgm_path.read_bytes()).decode("utf-8")
+                _audio_component_html(bgm_b64, loop=True, hidden_label=f"bgm_{bgm_key}")
+            except Exception:
+                pass
+
+    # 2) One-shot SFX (queued to survive st.rerun)
+    pending_key = st.session_state.get("pending_sfx")
+    if pending_key:
+        sfx_path = SFX.get(pending_key)
+        if sfx_path and sfx_path.exists():
+            try:
+                sfx_b64 = base64.b64encode(sfx_path.read_bytes()).decode("utf-8")
+                _audio_component_html(sfx_b64, loop=False, hidden_label=f"sfx_{pending_key}_{int(time.time()*1000)}")
+            except Exception:
+                pass
+        st.session_state.pending_sfx = None
+
+
+def render_audio_status_hint():
+    with st.expander("🔊 사운드 파일 점검", expanded=False):
+        rows = []
+        for k, v in BGM.items():
+            rows.append({"구분": f"BGM · {k}", "파일명": v.name, "존재": "✅" if v.exists() else "❌"})
+        for k, v in SFX.items():
+            rows.append({"구분": f"SFX · {k}", "파일명": v.name, "존재": "✅" if v.exists() else "❌"})
+        st.dataframe(pd.DataFrame(rows), use_container_width=True)
+        st.caption("※ 브라우저 자동재생 정책에 따라 첫 클릭(모험 시작/버튼 클릭) 이후에 사운드가 재생되는 경우가 있습니다.")
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("정답 효과음 테스트", key="sfx_test_correct"):
+                play_sfx_now("correct")
+            if st.button("정복 효과음 테스트", key="sfx_test_conquer"):
+                play_sfx_now("conquer")
+        with c2:
+            if st.button("오답 효과음 테스트", key="sfx_test_wrong"):
+                play_sfx_now("wrong")
+            if st.button("최종 효과음 테스트", key="sfx_test_final"):
+                play_sfx_now("final")
 
 
 def append_attempt_log(mission_key: str, q_idx: int, q_type: str, payload: dict):
@@ -497,6 +657,7 @@ def append_attempt_log(mission_key: str, q_idx: int, q_type: str, payload: dict)
     row = {
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "name": user.get("name", ""),
+        "organization": user.get("org", ""),
         "department": user.get("dept", ""),
         "mission_key": mission_key,
         "mission_title": mission["title"],
@@ -568,11 +729,354 @@ def get_grade(score: int, total: int):
     return "재학습 권장 🔁"
 
 
+
 def reset_game():
     st.session_state.clear()
     st.rerun()
 
 
+def _load_log_df():
+    if not LOG_FILE.exists():
+        return None, "아직 누적 로그 파일이 없습니다."
+    try:
+        df = pd.read_csv(LOG_FILE, encoding="utf-8-sig")
+    except Exception as e:
+        return None, f"로그 파일을 읽지 못했습니다: {e}"
+    if df.empty:
+        return None, "로그 데이터가 비어 있습니다."
+    return df, None
+
+
+def _build_participant_snapshot(df: pd.DataFrame):
+    df = df.copy()
+
+    # 기본 컬럼 보정
+    if "organization" not in df.columns:
+        if "department" in df.columns:
+            df["organization"] = df["department"]
+        else:
+            df["organization"] = "미분류"
+    df["organization"] = df["organization"].fillna("").astype(str).str.strip().replace("", "미분류")
+
+    if "name" not in df.columns:
+        df["name"] = "이름미상"
+    df["name"] = df["name"].fillna("").astype(str).str.strip().replace("", "이름미상")
+
+    if "department" not in df.columns:
+        df["department"] = ""
+
+    for col in ["awarded_score", "max_score", "question_index"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+        else:
+            df[col] = 0
+
+    if "timestamp" in df.columns:
+        df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+    else:
+        df["timestamp"] = pd.NaT
+
+    if "question_code" not in df.columns:
+        if "mission_key" in df.columns:
+            df["question_code"] = df["mission_key"].astype(str) + "_Q" + df["question_index"].astype(int).astype(str)
+        else:
+            df["question_code"] = "Q?"
+
+    if "mission_key" not in df.columns:
+        # question_code 기반으로 복원 시도
+        df["mission_key"] = df["question_code"].astype(str).str.split("_Q").str[0]
+
+    df["learner_id"] = df["organization"] + "|" + df["name"]
+
+    # 최신 제출 기준 문항 스냅샷(문항별 중복 제거)
+    df_sorted = df.sort_values(["timestamp"], ascending=True)
+    latest_per_q = df_sorted.drop_duplicates(subset=["learner_id", "question_code"], keep="last")
+
+    # 총 문항 수 / 테마별 문항 수
+    total_questions = sum(len(SCENARIOS[k]["quiz"]) for k in SCENARIO_ORDER)
+    theme_question_counts = {k: len(SCENARIOS[k]["quiz"]) for k in SCENARIO_ORDER}
+
+    # 참여자별 기본 집계
+    attempts_by_user = (
+        df.groupby(["learner_id", "organization", "name"], as_index=False)
+          .agg(
+              total_attempts=("question_code", "count"),
+              last_activity=("timestamp", "max"),
+          )
+    )
+
+    score_by_user = (
+        latest_per_q.groupby(["learner_id"], as_index=False)
+        .agg(
+            total_score=("awarded_score", "sum"),
+            answered_questions=("question_code", "nunique"),
+        )
+    )
+
+    # 참여자별 완료 테마 수 계산
+    theme_counts = (
+        latest_per_q.groupby(["learner_id", "mission_key"], as_index=False)
+        .agg(answered_in_theme=("question_code", "nunique"))
+    )
+    theme_counts["theme_total_questions"] = theme_counts["mission_key"].map(theme_question_counts).fillna(999)
+    theme_counts["theme_completed"] = theme_counts["answered_in_theme"] >= theme_counts["theme_total_questions"]
+
+    completed_theme_cnt = (
+        theme_counts.groupby("learner_id", as_index=False)
+        .agg(completed_themes=("theme_completed", "sum"))
+    )
+
+    participants = attempts_by_user.merge(score_by_user, on="learner_id", how="left").merge(completed_theme_cnt, on="learner_id", how="left")
+    participants["total_score"] = participants["total_score"].fillna(0).astype(int)
+    participants["answered_questions"] = participants["answered_questions"].fillna(0).astype(int)
+    participants["completed_themes"] = participants["completed_themes"].fillna(0).astype(int)
+    participants["completion_rate_q"] = ((participants["answered_questions"] / max(total_questions, 1)) * 100).round(1)
+    participants["score_rate"] = ((participants["total_score"] / max(TOTAL_SCORE, 1)) * 100).round(1)
+    participants["is_completed"] = participants["answered_questions"] >= total_questions
+    participants["status"] = participants["is_completed"].map({True: "수료", False: "진행중"})
+
+    # 기관별 요약
+    org_summary = (
+        participants.groupby("organization", as_index=False)
+        .agg(
+            participants=("learner_id", "nunique"),
+            completed=("is_completed", "sum"),
+            avg_score=("total_score", "mean"),
+            avg_score_rate=("score_rate", "mean"),
+            avg_completion_rate=("completion_rate_q", "mean"),
+            latest_activity=("last_activity", "max"),
+        )
+    )
+    org_attempts = (
+        df.groupby("organization", as_index=False)
+          .agg(total_attempts=("question_code", "count"))
+    )
+    org_summary = org_summary.merge(org_attempts, on="organization", how="left")
+    org_summary["avg_score"] = org_summary["avg_score"].round(1)
+    org_summary["avg_score_rate"] = org_summary["avg_score_rate"].round(1)
+    org_summary["avg_completion_rate"] = org_summary["avg_completion_rate"].round(1)
+    org_summary["completion_rate"] = ((org_summary["completed"] / org_summary["participants"].replace(0, 1)) * 100).round(1)
+    org_summary = org_summary.sort_values(["avg_score", "participants"], ascending=[False, False]).reset_index(drop=True)
+
+    # 보기 좋은 참여자 테이블
+    participants_view = participants.copy()
+    participants_view["last_activity"] = participants_view["last_activity"].dt.strftime("%Y-%m-%d %H:%M").fillna("-")
+    participants_view = participants_view.sort_values(["last_activity", "total_score"], ascending=[False, False])
+
+    return {
+        "raw": df,
+        "latest_per_q": latest_per_q,
+        "participants": participants,
+        "participants_view": participants_view,
+        "org_summary": org_summary,
+        "total_questions": total_questions,
+    }
+
+
+
+
+def render_admin_password_gate():
+    st.markdown(
+        """
+        <div class='admin-lock'>
+          <div style='font-weight:800; margin-bottom:4px;'>🔐 관리자 화면</div>
+          <div style='font-size:0.9rem; color:#EADFC4;'>기관별 누적 대시보드 / 문항별 통계 / 전체 참가자 현황은 관리자 인증 후 확인할 수 있습니다.</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    pwd = st.text_input("관리자 비밀번호", type="password", key="admin_pwd_input", placeholder="비밀번호 입력")
+    c1, c2 = st.columns([2, 1])
+    with c1:
+        if st.button("관리자 인증", use_container_width=True):
+            if pwd == ADMIN_PASSWORD:
+                st.session_state.admin_authed = True
+                try:
+                    st.toast("관리자 인증 완료", icon="✅")
+                except Exception:
+                    pass
+                st.rerun()
+            else:
+                st.error("비밀번호가 올바르지 않습니다.")
+    with c2:
+        if st.button("맵으로", use_container_width=True):
+            if st.session_state.get("user_info"):
+                st.session_state.stage = "map"
+            else:
+                st.session_state.stage = "intro"
+            st.rerun()
+    st.caption("※ 보안을 위해 실제 운영 시 환경변수 COMPLIANCE_ADMIN_PASSWORD 설정을 권장합니다.")
+
+
+def _render_org_ranking_cards(org_summary: pd.DataFrame, top_n: int = 5):
+    if org_summary.empty:
+        st.info("기관 요약 데이터가 없습니다.")
+        return
+    top_df = org_summary.head(top_n).copy()
+    st.markdown("#### 🏅 기관별 평균 점수 랭킹")
+    for i, row in top_df.reset_index(drop=True).iterrows():
+        pct = float(row.get("avg_score_rate", 0) or 0)
+        st.markdown(
+            f"""
+            <div class='rank-card'>
+              <div class='rank-title'>{i+1}. {row['organization']}</div>
+              <div class='rank-bar'><div class='rank-fill' style='width:{max(0, min(100, pct))}%;'></div></div>
+              <div class='rank-meta'>
+                평균 점수율 {pct:.1f}% · 참여자 {int(row.get('participants', 0))}명 · 수료율 {float(row.get('completion_rate', 0) or 0):.1f}%
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+
+def render_org_dashboard(compact: bool = False):
+    st.markdown("### 🏢 기관별 참여/점수 대시보드")
+
+    df, err = _load_log_df()
+    if err:
+        st.info(err)
+        return
+
+    snap = _build_participant_snapshot(df)
+    participants = snap["participants"]
+    participants_view = snap["participants_view"]
+    org_summary = snap["org_summary"]
+
+    if participants.empty:
+        st.info("표시할 참여자 데이터가 없습니다.")
+        return
+
+    total_people = int(participants["learner_id"].nunique())
+    completed_people = int(participants["is_completed"].sum())
+    avg_score_all = float(participants["total_score"].mean()) if total_people else 0.0
+    avg_completion_all = float(participants["completion_rate_q"].mean()) if total_people else 0.0
+
+    st.markdown(
+        f"""
+        <div class='dash-grid'>
+          <div class='dash-card'><div class='label'>참여자 수</div><div class='value'>{total_people}명</div></div>
+          <div class='dash-card'><div class='label'>수료자 수</div><div class='value'>{completed_people}명</div></div>
+          <div class='dash-card'><div class='label'>전체 평균 점수</div><div class='value'>{avg_score_all:.1f}/{TOTAL_SCORE}</div></div>
+          <div class='dash-card'><div class='label'>전체 평균 진행률</div><div class='value'>{avg_completion_all:.1f}%</div></div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    c_left, c_right = st.columns([1.2, 1])
+    with c_left:
+        org_view = org_summary.copy()
+        if not org_view.empty:
+            org_view["latest_activity"] = pd.to_datetime(org_view["latest_activity"], errors="coerce").dt.strftime("%Y-%m-%d %H:%M").fillna("-")
+            org_view = org_view.rename(columns={
+                "organization": "기관",
+                "participants": "참여자 수",
+                "completed": "수료자 수",
+                "completion_rate": "수료율(%)",
+                "avg_score": "평균 점수",
+                "avg_score_rate": "평균 점수율(%)",
+                "avg_completion_rate": "평균 진행률(%)",
+                "total_attempts": "누적 제출 수",
+                "latest_activity": "최근 참여",
+            })
+            st.dataframe(org_view, use_container_width=True, height=280 if compact else None)
+
+            chart_df = org_view[["기관", "평균 점수율(%)"]].set_index("기관")
+            st.bar_chart(chart_df)
+        else:
+            st.info("기관 집계 데이터가 없습니다.")
+
+    with c_right:
+        _render_org_ranking_cards(org_summary, top_n=5 if not compact else 3)
+
+    if compact:
+        return
+
+    st.markdown("#### 👥 참가자 누적 현황")
+    org_filter_options = ["전체"] + sorted([x for x in participants_view["organization"].dropna().astype(str).unique().tolist() if x])
+    selected_org = st.selectbox("기관 필터", org_filter_options, key="org_dashboard_filter")
+
+    p_view = participants_view.copy()
+    if selected_org != "전체":
+        p_view = p_view[p_view["organization"] == selected_org]
+
+    p_view = p_view.rename(columns={
+        "organization": "기관",
+        "name": "이름",
+        "status": "상태",
+        "total_score": "총점",
+        "score_rate": "점수율(%)",
+        "answered_questions": "제출 문항수",
+        "completed_themes": "완료 테마수",
+        "completion_rate_q": "문항 진행률(%)",
+        "total_attempts": "누적 제출 수",
+        "last_activity": "최근 참여",
+    })
+    show_cols = ["기관", "이름", "상태", "총점", "점수율(%)", "완료 테마수", "제출 문항수", "문항 진행률(%)", "누적 제출 수", "최근 참여"]
+    st.dataframe(p_view[show_cols], use_container_width=True)
+
+    csv_bytes = p_view[show_cols].to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+    st.download_button(
+        "📥 참가자 현황 CSV 다운로드",
+        data=csv_bytes,
+        file_name=f"participants_dashboard_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
+
+
+def render_admin_page():
+    st.title("🔐 관리자 대시보드")
+    if st.session_state.get("audio_debug"):
+        render_audio_status_hint()
+
+    if not st.session_state.get("admin_authed", False):
+        render_admin_password_gate()
+        return
+
+    st.success("관리자 인증 완료")
+    c1, c2, c3 = st.columns([1,1,1])
+    with c1:
+        if st.button("🗺️ 맵으로 돌아가기", use_container_width=True):
+            st.session_state.stage = "map" if st.session_state.get("user_info") else "intro"
+            st.rerun()
+    with c2:
+        if st.button("🏠 첫 화면", use_container_width=True):
+            st.session_state.stage = "intro"
+            st.rerun()
+    with c3:
+        if st.button("🔓 로그아웃", use_container_width=True):
+            st.session_state.admin_authed = False
+            st.rerun()
+
+    tab1, tab2, tab3 = st.tabs(["🏢 기관 대시보드", "🧠 문항 통계", "📄 로그 관리"])
+
+    with tab1:
+        render_org_dashboard(compact=False)
+
+    with tab2:
+        render_admin_question_stats()
+
+    with tab3:
+        df, err = _load_log_df()
+        if err:
+            st.info(err)
+        else:
+            st.write(f"누적 로그 건수: {len(df):,}건")
+            if "organization" in df.columns:
+                st.write("기관별 로그 건수")
+                cnt = df["organization"].fillna("미분류").value_counts().reset_index()
+                cnt.columns = ["기관", "로그 건수"]
+                st.dataframe(cnt, use_container_width=True)
+            st.dataframe(df.tail(200), use_container_width=True, height=320)
+            st.download_button(
+                "📥 전체 로그 CSV 다운로드",
+                data=df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig"),
+                file_name=f"compliance_training_full_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
 def render_admin_question_stats():
     st.markdown("### 🛠 관리자용 문항별 정답률 통계")
 
@@ -613,8 +1117,14 @@ def render_admin_question_stats():
     df["is_correct_norm"] = df.apply(_is_correct_norm, axis=1)
 
     name_series = df["name"].astype(str) if "name" in df.columns else pd.Series([""] * len(df))
-    dept_series = df["department"].astype(str) if "department" in df.columns else pd.Series([""] * len(df))
-    df["learner_key"] = name_series + "|" + dept_series
+    if "organization" in df.columns:
+        org_series = df["organization"].astype(str)
+    elif "department" in df.columns:
+        org_series = df["department"].astype(str)
+    else:
+        org_series = pd.Series([""] * len(df))
+    df["learner_key"] = name_series + "|" + org_series
+
     df["question_label"] = df["mission_title"].astype(str) + " · Q" + df["question_index"].astype(int).astype(str)
 
     attempt_stats = (
@@ -713,7 +1223,7 @@ def render_conquer_fx_if_needed():
         fx_progress.progress(int(i / len(fx_steps) * 100))
         time.sleep(0.28)
 
-    play_sfx(SFX["conquer"])
+    play_sfx_now("conquer")
 
     new_map = get_current_map_image()
     if new_map:
@@ -891,7 +1401,7 @@ def render_mcq_question(m_key: str, q_idx: int, q_data: dict):
         }
         submissions[q_idx] = result
 
-        play_sfx(SFX["correct"] if is_correct else SFX["wrong"])
+        queue_sfx("correct" if is_correct else "wrong")
         try:
             st.toast("정답입니다!" if is_correct else "다시 생각해보세요", icon="✨" if is_correct else "⚠️")
         except Exception:
@@ -977,7 +1487,7 @@ def render_text_question(m_key: str, q_idx: int, q_data: dict):
 
         ratio = (eval_res["awarded_score"] / q_data["score"]) if q_data["score"] else 0
         is_good = ratio >= TEXT_CORRECT_THRESHOLD
-        play_sfx(SFX["correct"] if is_good else SFX["wrong"])
+        queue_sfx("correct" if is_good else "wrong")
         try:
             st.toast("주관식 답안이 잘 작성되었어요!" if is_good else "보완 포인트를 확인해보세요", icon="✨" if is_good else "⚠️")
         except Exception:
@@ -1054,10 +1564,26 @@ def render_quiz(m_key: str):
 # 7) 메인 화면 분기
 # =========================================================
 init_state()
+render_audio_system()
+
+with st.sidebar:
+    st.checkbox("🔊 배경음악 재생", key="bgm_enabled")
+    st.checkbox("사운드 파일 점검 패널", key="audio_debug")
+    st.markdown("---")
+    st.caption("관리자")
+    if st.button("🔐 관리자 대시보드", use_container_width=True):
+        st.session_state.stage = "admin"
+        st.rerun()
+    if st.session_state.get("admin_authed", False):
+        if st.button("🔓 관리자 로그아웃", use_container_width=True):
+            st.session_state.admin_authed = False
+            st.rerun()
 
 if st.session_state.stage == "intro":
     st.title("🛡️ 2026 Compliance Adventure")
     st.caption("Guardian Training · 컴플라이언스 테마 정복형 학습")
+    if st.session_state.get("audio_debug"):
+        render_audio_status_hint()
 
     intro_map = get_current_map_image()
     if intro_map:
@@ -1075,12 +1601,17 @@ if st.session_state.stage == "intro":
         unsafe_allow_html=True,
     )
 
+    with st.expander("🏢 기관별 누적 현황 (미리보기)", expanded=False):
+        render_org_dashboard(compact=True)
+    st.caption("상세 통계는 좌측 사이드바의 ‘관리자 대시보드’에서 확인할 수 있습니다.")
+
     name = st.text_input("성함")
-    dept = st.selectbox("소속 부서", ["영업팀", "구매팀", "인사팀", "IT지원팀", "감사팀"])
+    org = st.selectbox("소속 기관", ORG_OPTIONS)
+    dept = st.selectbox("직무/부서 (학습 포인트용)", ["영업팀", "구매팀", "인사팀", "IT지원팀", "감사팀"])
 
     if st.button("모험 시작하기", use_container_width=True):
         if name.strip():
-            st.session_state.user_info = {"name": name.strip(), "dept": dept}
+            st.session_state.user_info = {"name": name.strip(), "org": org, "dept": dept}
             st.session_state.stage = "map"
             st.rerun()
         else:
@@ -1088,11 +1619,19 @@ if st.session_state.stage == "intro":
 
 elif st.session_state.stage == "map":
     user_name = st.session_state.user_info.get("name", "가디언")
+    user_org = st.session_state.user_info.get("org", "")
     user_dept = st.session_state.user_info.get("dept", "")
 
     st.title(f"🗺️ {user_name} 가디언의 지도")
+    if st.session_state.get("audio_debug"):
+        render_audio_status_hint()
+    cap_parts = []
+    if user_org:
+        cap_parts.append(f"소속 기관: {user_org}")
     if user_dept:
-        st.caption(f"부서 포인트 · {DEPT_GUIDE.get(user_dept, '')}")
+        cap_parts.append(f"부서 포인트 · {DEPT_GUIDE.get(user_dept, '')}")
+    if cap_parts:
+        st.caption(" | ".join(cap_parts))
 
     render_conquer_fx_if_needed()
     render_guardian_map()
@@ -1128,6 +1667,9 @@ elif st.session_state.stage == "map":
         unsafe_allow_html=True,
     )
 
+    with st.expander("🏢 기관별 누적 현황 (미리보기)", expanded=False):
+        render_org_dashboard(compact=True)
+
     if len(st.session_state.completed) == len(SCENARIO_ORDER):
         if st.button("최종 결과 보기", use_container_width=True):
             st.session_state.stage = "ending"
@@ -1160,8 +1702,12 @@ elif st.session_state.stage == "quiz":
 
     render_quiz(m_key)
 
+elif st.session_state.stage == "admin":
+    render_admin_page()
+
 elif st.session_state.stage == "ending":
     user_name = st.session_state.user_info.get("name", "가디언")
+    user_org = st.session_state.user_info.get("org", "")
     user_dept = st.session_state.user_info.get("dept", "")
     score = st.session_state.score
     grade = get_grade(score, TOTAL_SCORE)
@@ -1171,7 +1717,7 @@ elif st.session_state.stage == "ending":
 
     st.balloons()
     if not st.session_state.get("played_final_fanfare", False):
-        play_sfx(SFX["final"])
+        play_sfx_now("final")
         st.session_state.played_final_fanfare = True
 
     st.title("🏆 Guardian Training Complete")
@@ -1183,7 +1729,7 @@ elif st.session_state.stage == "ending":
             f"""
             <div class='card'>
               <div class='card-title'>최종 결과</div>
-              <div>소속: <b>{user_dept}</b></div>
+              <div>소속 기관: <b>{user_org or "-"}</b></div><div>직무/부서: <b>{user_dept or "-"}</b></div>
               <div>총점: <b>{score} / {TOTAL_SCORE}</b></div>
               <div>등급: <b>{grade}</b></div>
             </div>
@@ -1233,8 +1779,7 @@ elif st.session_state.stage == "ending":
             use_container_width=True,
         )
 
-    with st.expander("🛠 관리자용 문항 통계 보기", expanded=False):
-        render_admin_question_stats()
+    st.info("관리자용 기관 대시보드 / 문항 통계는 좌측 사이드바의 ‘관리자 대시보드’에서 확인할 수 있습니다.")
 
     c1, c2 = st.columns(2)
     with c1:
