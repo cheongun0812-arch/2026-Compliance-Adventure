@@ -1,18 +1,17 @@
 
 def render_stage_popup_html(title: str, body: str, note: str = ""):
     """중앙 스테이지 클리어 팝업(HTML 오버레이)."""
-    st.markdown(
-        f"""
-        <div class="stage-popup-overlay">
-          <div class="stage-popup-box">
-            <div class="stage-popup-title">{html.escape(title)}</div>
-            <div class="stage-popup-body">{html.escape(body)}</div>
-            {f'<div class="stage-popup-note">{html.escape(note)}</div>' if note else ''}
-          </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    note_html = f'<div class="stage-popup-note">{html.escape(note)}</div>' if note else ""
+    html_block = textwrap.dedent(f"""
+    <div class="stage-popup-overlay">
+      <div class="stage-popup-box">
+        <div class="stage-popup-title">{html.escape(title)}</div>
+        <div class="stage-popup-body">{html.escape(body)}</div>
+        {note_html}
+      </div>
+    </div>
+    """).strip()
+    st.markdown(html_block, unsafe_allow_html=True)
 
 import streamlit as st
 from datetime import datetime
@@ -24,6 +23,7 @@ import uuid
 import base64
 import pandas as pd
 import numpy as np
+import textwrap
 try:
     from streamlit.errors import StreamlitInvalidHeightError
 except Exception:
@@ -2330,7 +2330,7 @@ def _build_participant_snapshot(df: pd.DataFrame):
 
 def render_intro_org_cumulative_board():
     """메인 화면 전용: 기관별 누적 점수/참여 현황 대시보드 (참여자용 요약 뷰)."""
-    st.markdown("### 🏢 기관별 누적 점수 및 참여 현황")
+    st.markdown("### 🏢 Cumulative score and participation status by institution")
 
     df, err = _load_log_df()
     if err:
@@ -2563,29 +2563,29 @@ def render_intro_org_cumulative_board():
                 """
             )
 
-        st.markdown(
+        html_table = textwrap.dedent(
             f"""
             <div class="intro-org-board-wrap">
-              <div class="intro-org-board-sub">메인 화면에서는 기관별 누적 현황 요약만 표시됩니다. 상세 로그/통계는 관리자 대시보드에서 확인하세요.</div>
-              <table class="intro-org-table">
-                <thead>
-                  <tr>
-                    <th style="width:68px;">순위</th>
-                    <th>기관명</th>
-                    <th style="width:140px;">누적 점수</th>
-                    <th style="width:140px;">참가자 평균점수</th>
-                    <th style="width:150px;">참여자 수</th>
-                    <th style="width:220px;">참여율</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {''.join(rows_html)}
-                </tbody>
-              </table>
+            <div class="intro-org-board-sub">메인 화면에서는 기관별 누적 현황 요약만 표시됩니다. 상세 로그/통계는 관리자 대시보드에서 확인하세요.</div>
+            <table class="intro-org-table">
+            <thead>
+            <tr>
+            <th style="width:68px;">순위</th>
+            <th>기관명</th>
+            <th style="width:140px;">누적 점수</th>
+            <th style="width:140px;">참가자 평균점수</th>
+            <th style="width:150px;">참여자 수</th>
+            <th style="width:220px;">참여율</th>
+            </tr>
+            </thead>
+            <tbody>
+            {''.join(rows_html)}
+            </tbody>
+            </table>
             </div>
             """,
-            unsafe_allow_html=True,
-        )
+        ).strip()
+        st.markdown(html_table, unsafe_allow_html=True)
 
     except Exception as e:
         st.info(f"기관별 누적 현황 표시 중 오류가 발생했습니다: {e}")
