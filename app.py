@@ -21,7 +21,6 @@ import os
 import re
 import difflib
 import html
-import random
 
 # =========================================================
 # 1) 페이지 설정 / 스타일
@@ -838,9 +837,6 @@ def init_state():
         "employee_selected_record": None,
         "employee_lookup_modal_open": False,
         "retry_offer": None,
-        "transition_offer": None,  # {"from":..., "to":..., "ready_at":...}
-        "transition_offer_ready_at": 0.0,
-        "transition_offer_shown": False,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -926,40 +922,21 @@ def mark_theme_complete_if_ready(m_key: str):
     ensure_quiz_progress(m_key)
     subs = st.session_state.quiz_progress[m_key]["submissions"]
     total_q = len(SCENARIOS[m_key]["quiz"])
-    if len(subs) != total_q:
-        return
-
-    st.session_state.mission_scores[m_key] = theme_score_from_submissions(m_key)
-    recalc_total_score()
-
-    if m_key in st.session_state.completed:
-        return
-
-    st.session_state.completed.append(m_key)
-    st.session_state.last_cleared_mission = m_key
-    st.session_state.show_conquer_fx = True
-    st.session_state.map_fx_done = False
-
-    is_final = len(st.session_state.completed) >= len(SCENARIO_ORDER)
-    st.session_state.map_celebrate_theme = "final" if is_final else m_key
-    st.session_state.map_celebrate_until = float(time.time()) + 3.0
-
-    # 3초 연출 후 다음 스테이지 이동 여부 팝업 예약
-    try:
-        cur_idx = SCENARIO_ORDER.index(m_key)
-        if cur_idx < len(SCENARIO_ORDER) - 1:
-            to_key = SCENARIO_ORDER[cur_idx + 1]
-        else:
-            to_key = "__ending__"
-        st.session_state.transition_offer = {"from": m_key, "to": to_key}
-        st.session_state.transition_offer_ready_at = float(time.time()) + 3.0
-        st.session_state.transition_offer_shown = False
-    except Exception:
-        pass
-
-    # 테마 정복 사운드 큐 (최종 정복은 fanfare 우선)
-    queue_sfx("final" if is_final else "conquer")
-
+    if len(subs) == total_q:
+        st.session_state.mission_scores[m_key] = theme_score_from_submissions(m_key)
+        recalc_total_score()
+        if m_key not in st.session_state.completed:
+            st.session_state.completed.append(m_key)
+            st.session_state.last_cleared_mission = m_key
+            st.session_state.show_conquer_fx = True
+            st.session_state.map_fx_done = False
+            st.session_state.map_celebrate_theme = m_key
+            st.session_state.map_celebrate_until = float(time.time()) + 5.0
+            # 테마 정복 사운드 큐 (최종 정복은 fanfare 우선)
+            if len(st.session_state.completed) >= len(SCENARIO_ORDER):
+                queue_sfx("final")
+            else:
+                queue_sfx("conquer")
 # =========================================================
 # 5) 유틸 함수 (이미지 / 사운드 / 로그 / 평가)
 # =========================================================
@@ -982,49 +959,35 @@ def get_ending_image():
 
 
 def show_map_with_fade(map_path: Path, caption: str = None, celebrate: bool = False):
-    """맵 이미지를 페이드 인으로 표시하고, celebrate=True일 때는 테마 위치에 작은 파티클(꽃가루/색종이)을 3초간 분출합니다."""
     if not map_path or not map_path.exists():
         st.warning("맵 이미지 파일을 찾을 수 없습니다.")
         return
     try:
         img_bytes = map_path.read_bytes()
         encoded = base64.b64encode(img_bytes).decode("utf-8")
-
-        confetti_html = ""
+        pollen_html = ""
         if celebrate:
-            theme = str(st.session_state.get("map_celebrate_theme") or "final")
-            origins = {
-                "subcontracting": (26, 66),
-                "security": (52, 30),
-                "fairtrade": (78, 62),
-                "final": (52, 52),
-            }
-            ox, oy = origins.get(theme, (52, 52))
-            colors = ["#FF4D4D", "#FFD166", "#06D6A0", "#118AB2", "#C77DFF"]
-
-            pieces = []
-            for _ in range(46):
-                top = oy + random.uniform(-3.2, 3.2)
-                left = ox + random.uniform(-4.0, 4.0)
-                size = random.uniform(2.2, 4.0)  # 작은 파티클
-                dx = random.uniform(-78, 78)
-                dy = random.uniform(-220, -120)  # 위로 분출
-                rot = random.uniform(140, 380)
-                delay = random.uniform(0.0, 0.25)
-                color = random.choice(colors)
-                pieces.append(
-                    f"<span class='confetti-piece' style='top:{top}%;left:{left}%;--s:{size}px;--dx:{dx}px;--dy:{dy}px;--r:{rot}deg;--d:{delay}s;--c:{color};'></span>"
+            pollen_positions = [
+                (8,18,6,0.0),(14,68,5,0.7),(22,35,7,1.2),(28,82,5,0.2),(35,12,6,0.9),
+                (42,58,5,1.6),(50,28,7,0.4),(57,76,6,1.1),(64,44,5,1.9),(72,16,6,0.5),
+                (79,62,7,1.4),(86,34,5,0.8),(18,50,4,1.8),(61,88,4,0.3),(74,92,4,1.5),
+                (10,90,4,0.6),(90,8,4,1.0),(46,6,4,1.7)
+            ]
+            dots = []
+            for top,left,size,delay in pollen_positions:
+                dots.append(
+                    f"<span class='pollen-dot' style='top:{top}%;left:{left}%;width:{size}px;height:{size}px;animation-delay:{delay}s;'></span>"
                 )
-            confetti_html = f"<div class='map-celebrate-overlay'>{''.join(pieces)}</div>"
+            pollen_html = f"<div class='map-pollen-overlay'>{''.join(dots)}</div>"
 
         st.markdown(
             f"""
             <div class="map-fade-wrap{' celebrate' if celebrate else ''}">
                 <img class="map-fade-img" src="data:image/png;base64,{encoded}" />
-                {confetti_html}
+                {pollen_html}
             </div>
             """,
-            unsafe_allow_html=True,
+            unsafe_allow_html=True
         )
         if caption:
             st.caption(caption)
@@ -1078,27 +1041,6 @@ def _audio_component_html(audio_b64: str, *, loop: bool = False, hidden_label: s
     </html>
     """
     components.html(html, height=0, width=0)
-
-
-def _schedule_rerun_in(delay_ms: int = 3000):
-    """3초 후 팝업 등 시간차 연출을 위해(가능하면) 자동 rerun을 트리거합니다.
-    - Streamlit 공식 API가 아니라 내부 메시지에 의존하므로 실패해도 앱은 정상 동작합니다.
-    """
-    try:
-        delay_ms = max(0, int(delay_ms))
-        js = f"""
-        <script>
-          setTimeout(() => {{
-            try {{
-              const msg = {{isStreamlitMessage: true, type: "streamlit:rerunScript"}};
-              window.parent.postMessage(msg, "*");
-            }} catch (e) {{}}
-          }}, {delay_ms});
-        </script>
-        """
-        components.html(js, height=0, width=0)
-    except Exception:
-        pass
 
 
 def queue_sfx(sfx_key: str):
@@ -2435,31 +2377,28 @@ def render_intro_org_cumulative_board():
               box-shadow: 0 0 12px rgba(43,214,118,.35);
             }
             .org-rate-text{min-width:48px; text-align:right; font-weight:700; color:#EFFFF7; font-size:.86rem;}
-        .map-celebrate-overlay{
-    position:absolute; inset:0; pointer-events:none; overflow:hidden;
-    border-radius:14px;
-}
-.map-celebrate-overlay .confetti-piece{
-    position:absolute;
-    width: var(--s, 3px);
-    height: var(--s, 3px);
-    border-radius: 2px;
-    background: var(--c, rgba(255,255,255,.9));
-    opacity:0;
-    transform: translate(0,0) rotate(0deg) scale(.9);
-    animation: eruptionBurst 3s cubic-bezier(.16,.84,.38,1) forwards;
-    animation-delay: var(--d, 0s);
-    box-shadow: 0 0 10px rgba(255,255,255,.14);
-}
-.map-fade-wrap.celebrate{
-    box-shadow: 0 0 0 1px rgba(255,227,130,.22), 0 10px 28px rgba(255,221,102,.12);
-}
-@keyframes eruptionBurst{
-    0%{ opacity:0; transform: translate(0,0) rotate(0deg) scale(.9); }
-    6%{ opacity:1; }
-    70%{ opacity:.95; }
-    100%{ opacity:0; transform: translate(var(--dx, 0px), var(--dy, -160px)) rotate(var(--r, 200deg)) scale(1.15); }
-}.stage-clear-banner{ animation: stageClearPulse .9s ease-in-out 2; }
+        .map-pollen-overlay{
+            position:absolute; inset:0; pointer-events:none; overflow:hidden;
+            border-radius:14px;
+        }
+        .map-pollen-overlay .pollen-dot{
+            position:absolute;
+            border-radius:50%;
+            background: radial-gradient(circle, rgba(255,244,169,.95) 0%, rgba(255,220,101,.55) 48%, rgba(255,220,101,0) 72%);
+            box-shadow:0 0 14px rgba(255,221,102,.35);
+            animation: pollenFloat 5s ease-in-out forwards;
+            opacity:0;
+        }
+        .map-fade-wrap.celebrate{
+            box-shadow: 0 0 0 1px rgba(255,227,130,.22), 0 10px 28px rgba(255,221,102,.12);
+        }
+        @keyframes pollenFloat{
+            0%{ transform:translateY(12px) scale(.85); opacity:0; }
+            10%{ opacity:.95; }
+            65%{ opacity:.88; }
+            100%{ transform:translateY(-42px) scale(1.18); opacity:0; }
+        }
+        .stage-clear-banner{ animation: stageClearPulse .9s ease-in-out 2; }
         @keyframes stageClearPulse{
             0%{ transform:scale(0.995); box-shadow:0 0 0 rgba(0,0,0,0); }
             50%{ transform:scale(1.01); box-shadow:0 8px 18px rgba(59,130,246,.16); }
@@ -2899,44 +2838,48 @@ def render_admin_question_stats():
 # 6) UI 조각들 (맵, 브리핑, 퀴즈)
 # =========================================================
 
-def render_conquer_fx_if_needed():
-    if not st.session_state.get("show_conquer_fx", False):
-        return
-    if st.session_state.get("map_fx_done", False):
-        return
-
-    pending_theme = st.session_state.get("last_cleared_mission")
-    is_final_clear = len(st.session_state.get("completed", [])) >= len(SCENARIO_ORDER)
-
-    if is_final_clear:
-        msg = "🏁 최종 테마 정복 완료!"
-        style = "border:1px solid rgba(250,204,21,.45); background: linear-gradient(90deg, rgba(250,204,21,.14), rgba(59,130,246,.10)); color:#FFF6D8;"
-    else:
-        title = SCENARIOS.get(str(pending_theme), {}).get("title", "테마")
-        title_plain = title.split(" ", 1)[1] if " " in title else title
-        msg = f"✨ {html.escape(title_plain)} 정복 완료! 가디언 맵이 업데이트되었습니다."
-        style = "border:1px solid rgba(74, 222, 128, .35); background: linear-gradient(90deg, rgba(16,185,129,.12), rgba(59,130,246,.08)); color:#EAFBF1;"
-
+def _render_center_popup(message_html: str):
+    """중앙 팝업(자동 닫힘/전환용)"""
     st.markdown(
         f"""
-        <div class="stage-clear-banner" style="margin:6px 0 12px 0; padding:10px 14px; border-radius:12px; {style} font-weight:700;">
-            {msg}
+        <div style="position:fixed; inset:0; z-index:9999; display:flex; align-items:center; justify-content:center;">
+          <div style="position:absolute; inset:0; background:rgba(0,0,0,.55);"></div>
+          <div style="
+                position:relative;
+                width:min(760px, 92vw);
+                background:#111827;
+                border:1px solid rgba(99,102,241,.40);
+                box-shadow:0 18px 44px rgba(0,0,0,.55);
+                border-radius:16px;
+                padding:18px 20px;
+                color:#F3F4F6;
+                text-align:center;
+            ">
+            {message_html}
+          </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    try:
-        st.toast("🏁 최종 테마 정복 완료!" if is_final_clear else "가디언 맵 업데이트!", icon="🎉" if is_final_clear else "🗺️")
-    except Exception:
-        pass
-    try:
-        st.balloons()
-    except Exception:
-        pass
 
-    st.session_state.map_fx_done = True
+def _stage_points_out_of_10(m_key: str) -> int:
+    """테마 점수(예: 30점 만점)를 10점 만점으로 환산해 표시."""
+    try:
+        scored = float(theme_score_from_submissions(m_key))
+        mx = float(theme_max_score(m_key))
+        if mx <= 0:
+            return 0
+        val = round((scored / mx) * 10)
+        return int(max(0, min(10, val)))
+    except Exception:
+        return 0
+
+def render_conquer_fx_if_needed():
+    # 요청: 스테이지별 화려한 이펙트(풍선/토스트/배너) 제거. 최종 축하 연출은 ending 화면에서만 처리.
     st.session_state.show_conquer_fx = False
+    st.session_state.map_fx_done = True
+    return
 
 
 def render_guardian_map():
@@ -2975,118 +2918,6 @@ def render_guardian_map():
 
     st.caption(" · ".join(status_labels))
 
-
-def _get_stage_display_name(m_key: str) -> str:
-    # 맵에 쓰이는 영어 표기(요청 반영)
-    mapping = {
-        "subcontracting": "Valley of Subcontracting",
-        "security": "Fortress of Information Security",
-        "fairtrade": "Castle of Fair Trade",
-    }
-    return mapping.get(str(m_key), SCENARIOS.get(str(m_key), {}).get("territory_name", str(m_key)))
-
-
-def _handle_transition_choice(go_next: bool):
-    offer = st.session_state.get("transition_offer") or {}
-    from_key = offer.get("from")
-    to_key = offer.get("to")
-
-    # 팝업 정리
-    st.session_state.transition_offer_shown = True
-    st.session_state.transition_offer = None
-    st.session_state.transition_offer_ready_at = 0.0
-
-    if not go_next:
-        st.rerun()
-
-    if to_key == "__ending__":
-        st.session_state.stage = "ending"
-        st.rerun()
-
-    if to_key in SCENARIO_ORDER:
-        st.session_state.current_mission = to_key
-        st.session_state.stage = "briefing"
-        st.rerun()
-
-    # 예외: 알 수 없는 대상이면 맵 유지
-    st.session_state.stage = "map"
-    st.rerun()
-
-
-def _render_transition_dialog_body():
-    offer = st.session_state.get("transition_offer") or {}
-    from_key = offer.get("from")
-    to_key = offer.get("to")
-
-    if not from_key:
-        st.session_state.transition_offer = None
-        st.session_state.transition_offer_ready_at = 0.0
-        st.session_state.transition_offer_shown = True
-        st.rerun()
-
-    try:
-        cur_idx = SCENARIO_ORDER.index(from_key)
-    except Exception:
-        cur_idx = 0
-
-    stage_no = cur_idx + 1
-    from_name = _get_stage_display_name(from_key)
-
-    if to_key == "__ending__":
-        st.markdown(f"### ✅ Final Stage cleared!")
-        st.markdown(f'**Stage {stage_no} "{from_name}"** 정복 완료!\n\n최종 결과를 확인하시겠습니까?')
-        c1, c2 = st.columns(2)
-        with c1:
-            if st.button("YES", key="trans_yes_final", use_container_width=True):
-                _handle_transition_choice(True)
-        with c2:
-            if st.button("NO", key="trans_no_final", use_container_width=True):
-                _handle_transition_choice(False)
-        return
-
-    next_name = _get_stage_display_name(to_key)
-    next_stage_no = stage_no + 1
-
-    st.markdown(f"### ✅ Stage {stage_no} cleared!")
-    st.markdown(f'**Stage {stage_no} "{from_name}"** 정복 완료!\n\n**Stage {next_stage_no} "{next_name}"**로 이동하시겠습니까?')
-
-    c1, c2 = st.columns(2)
-    with c1:
-        if st.button("YES", key="trans_yes_next", use_container_width=True):
-            _handle_transition_choice(True)
-    with c2:
-        if st.button("NO", key="trans_no_next", use_container_width=True):
-            _handle_transition_choice(False)
-
-
-if hasattr(st, "dialog"):
-    @st.dialog("✨ Stage Clear")
-    def render_stage_transition_popup():
-        _render_transition_dialog_body()
-else:
-    def render_stage_transition_popup():
-        st.markdown("## ✨ Stage Clear")
-        _render_transition_dialog_body()
-
-
-def maybe_show_stage_transition_popup():
-    offer = st.session_state.get("transition_offer")
-    if not offer:
-        return
-    if st.session_state.get("transition_offer_shown", False):
-        return
-
-    ready_at = float(st.session_state.get("transition_offer_ready_at", 0.0) or 0.0)
-    now = float(time.time())
-
-    if ready_at and now < ready_at:
-        # 3초 연출이 끝난 뒤 자동으로 팝업이 뜨도록 rerun 예약
-        remaining_ms = int((ready_at - now) * 1000) + 60
-        _schedule_rerun_in(remaining_ms)
-        return
-
-    # 연출 종료 후 팝업 표시
-    render_stage_transition_popup()
 
 def render_briefing(m_key: str):
     mission = SCENARIOS[m_key]
@@ -3626,7 +3457,6 @@ elif st.session_state.stage == "map":
 
     render_conquer_fx_if_needed()
     render_guardian_map()
-    maybe_show_stage_transition_popup()
 
     st.write("관문을 선택하세요:")
     cols = st.columns(3)
@@ -3710,7 +3540,17 @@ elif st.session_state.stage == "ending":
     total_attempts = len(st.session_state.attempt_history)
     wrong_like = sum(1 for r in st.session_state.attempt_history if str(r.get("is_correct", "")) in ["N", "PARTIAL"])
 
-    st.balloons()
+    if not st.session_state.get("ending_balloons_done", False):
+        try:
+            st.balloons()
+            time.sleep(0.2)
+            st.balloons()
+            time.sleep(0.2)
+            st.balloons()
+        except Exception:
+            pass
+        st.session_state.ending_balloons_done = True
+
     if not st.session_state.get("played_final_fanfare", False):
         play_sfx_now("final")
         st.session_state.played_final_fanfare = True
