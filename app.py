@@ -641,9 +641,9 @@ THEME_ICONS = {
 
 # 스테이지 팝업에 사용할 표시명(요청: Valley/Fortress/Castle)
 STAGE_DISPLAY_NAMES = {
-    "subcontracting": "Valley of Subcontracting",
-    "security": "Fortress of Information Security",
-    "fairtrade": "Castle of Fair Trade",
+    "subcontracting": "하도급의 계곡",
+    "security": "정보보안의 요새",
+    "fairtrade": "공정거래의 성",
 }
 
 
