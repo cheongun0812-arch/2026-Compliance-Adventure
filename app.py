@@ -641,9 +641,9 @@ THEME_ICONS = {
 
 # 스테이지 팝업에 사용할 표시명(요청: Valley/Fortress/Castle)
 STAGE_DISPLAY_NAMES = {
-    "subcontracting": "Valley of Subcontracting",
-    "security": "Fortress of Information Security",
-    "fairtrade": "Castle of Fair Trade",
+    "subcontracting": "하도급의 계곡 (Valley of Subcontracting)",
+    "security": "정보보안의 요새 (Fortress of Information Security)",
+    "fairtrade": "공정거래의 성 (Castle of Fair Trade)",
 }
 
 
@@ -2092,26 +2092,25 @@ def render_retry_offer_box(context: str):
     org = html.escape(str(user.get("org", user.get("organization", "")) or "미분류"))
 
     if next_round >= max_attempts:
-        title = "⚠️ Bonus attempt (3rd) notice"
+        title = "⚠️ 보너스 도전(3회차) 안내"
         desc = (
-            "This is your last chance. Attempt 3 is a bonus learning opportunity and will NOT affect "
-            "your institution’s cumulative/average score. Focus on learning and challenge again."
+            "이번 도전이 마지막입니다. 3회차는 개인 학습 기회를 보장하는 보너스 도전이며, "
+            "기관의 누적/평균 점수에는 반영되지 않습니다. 학습에 집중해 도전해보세요."
         )
     else:
-        title = "🔄 Re-participation (Re-challenge) information"
+        title = "🔄 재참여(재도전) 안내"
         desc = (
-            "Re-participation is limited. You may re-participate up to two additional times (max 3 attempts). "
-            "For institution scores, the higher score between Attempts 1 and 2 will be reflected in the "
-            "cumulative/average score after the round ends."
+            "재참여는 제한됩니다(총 3회). 1~2회차 중 더 높은 점수가 기관의 누적/평균 점수에 자동 반영됩니다. "
+            "3회차는 보너스 도전으로, 기관 점수에는 반영되지 않습니다."
         )
 
     st.markdown(
         f"""
         <div class="retry-offer-card">
           <div class="retry-offer-title">{title}</div>
-          <div class="retry-offer-body"><b>{name}</b> ({org}) · Status: Completed <b>{completed_attempts}</b> / Max <b>{max_attempts}</b> attempts</div>
+          <div class="retry-offer-body"><b>{name}</b> ({org}) · 현재: <b>{completed_attempts}</b>회 완료 / 최대 <b>{max_attempts}</b>회</div>
           <div class="retry-offer-desc">{desc}</div>
-          <div class="retry-offer-note">If selected, it will skip the main screen and start directly from Stage 1. (Remaining retry opportunities: {remaining_after})</div>
+          <div class="retry-offer-note">선택 시 메인 화면을 건너뛰고 1단계부터 바로 시작합니다. (남은 재도전 기회: {remaining_after}회)</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -2278,8 +2277,8 @@ def _build_participant_snapshot(df: pd.DataFrame):
 
     # Status label (institution score policy)
     participants["status"] = participants["is_completed"].map({
-        True: "Completed (Institution score: best of Attempts 1–2)",
-        False: "In progress (Institution score: best of Attempts 1–2)"
+        True: "완료 (기관 점수: 1~2회차 최고점 반영)",
+        False: "진행 중 (기관 점수: 1~2회차 최고점 반영)"
     })
 
     org_summary = (
@@ -2972,7 +2971,7 @@ def render_conquer_fx_if_needed():
 
 
 def render_guardian_map():
-    st.subheader("🗺️ Guardian’s Map")
+    st.subheader("🗺️ 가디언의 지도")
 
     map_img = get_current_map_image()
     cleared_cnt = len(st.session_state.get("completed", []))
@@ -3305,7 +3304,7 @@ def render_text_question(m_key: str, q_idx: int, q_data: dict):
 def render_quiz_navigation_controls(m_key: str):
     """퀴즈 이전/다음 + 스테이지 제출 버튼.
     - Stage 1~2: 제출 시 3초 팝업 후 자동 다음 스테이지로 이동
-    - Stage 3: 제출 시 최종 제출(YES) / 재도전(Try again) 선택 팝업
+    - Stage 3: 제출 시 최종 제출(YES) / 재도전 선택 팝업
     """
     ensure_quiz_progress(m_key)
     progress = st.session_state.quiz_progress[m_key]
@@ -3671,9 +3670,9 @@ elif st.session_state.stage == "stage_transition":
     score_10 = int(info.get("score_10") or 0)
     max_10 = int(info.get("max_10") or 10)
 
-    title = f"{name} has cleared Stage {stage_num} \"{stage_name}\""
-    body = f"Score: {score_10}/{max_10}"
-    render_stage_popup_html(title=title, body=body, note="Moving to the next stage...")
+    title = f"{name}님이 {stage_num}단계 \"{stage_name}\"를 클리어했습니다."
+    body = f"획득 점수: {score_10}/{max_10}점"
+    render_stage_popup_html(title=title, body=body, note="다음 단계로 이동합니다...")
 
     time.sleep(3)
 
@@ -3693,18 +3692,18 @@ elif st.session_state.stage == "final_prompt":
     name = str(info.get("name") or user.get("name") or "참가자")
     total_score = int(info.get("total_score") or st.session_state.get("score", 0) or 0)
 
-    # 중앙 대화상자(YES / Try again)
-    @st.dialog("🏁 Final submission")
+    # 중앙 대화상자(제출 / 재도전)
+    @st.dialog("🏁 최종 점수 제출")
     def _final_submit_dialog():
-        st.markdown(f"**{name}** cleared all stages with **{total_score}/100** points (including **{PARTICIPATION_SCORE} participation points**).")
-        st.markdown("Do you want to submit the final score?")
+        st.markdown(f"**{name}** 님이 모든 스테이지를 **{total_score}/100점**(참여점수 **{PARTICIPATION_SCORE}점** 포함)으로 클리어했습니다.")
+        st.markdown("최종 점수를 제출하시겠습니까?")
         c1, c2 = st.columns(2)
         with c1:
-            if st.button("Yes", use_container_width=True):
+            if st.button("네, 제출하기", use_container_width=True):
                 st.session_state.stage = "ending"
                 st.rerun()
         with c2:
-            if st.button("Try again", use_container_width=True):
+            if st.button("재도전", use_container_width=True):
                 # 마지막 도전 안내 후 Stage 1로 이동
                 st.session_state.stage_transition = {"kind": "retry_transition", "name": name}
                 st.session_state.stage = "retry_transition"
@@ -3722,7 +3721,7 @@ elif st.session_state.stage == "retry_transition":
     current_round = int(st.session_state.get("training_attempt_round", 1) or 1)
     if current_round >= 3:
         render_stage_popup_html(
-            title="No more retries",
+            title="재도전 횟수를 모두 사용했습니다",
             body="You have used all available attempts.",
             note="Returning to the main screen...",
         )
@@ -3733,7 +3732,7 @@ elif st.session_state.stage == "retry_transition":
     render_stage_popup_html(
         title="Last challenge",
         body="This is your last chance. Focus on studying to achieve a higher score.",
-        note="Moving to Stage 1...",
+        note="1단계로 이동합니다...",
     )
     time.sleep(3)
 
@@ -3759,7 +3758,7 @@ elif st.session_state.stage == "ending":
         play_sfx_now("final")
         st.session_state.played_final_fanfare = True
 
-    st.title("🏆 Guardian Training Complete")
+    st.title("🏆 가디언 트레이닝 완료")
     st.success(f"{user_name} 가디언님, 모든 테마를 정복했습니다!")
 
     _ending_img = get_ending_image()
