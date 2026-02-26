@@ -3671,9 +3671,9 @@ elif st.session_state.stage == "stage_transition":
     score_10 = int(info.get("score_10") or 0)
     max_10 = int(info.get("max_10") or 10)
 
-    title = f"{name} has cleared Stage {stage_num} \"{stage_name}\""
+    title = f"{name} 클리어했습니다. {stage_num} \"{stage_name}\""
     body = f"Score: {score_10}/{max_10}"
-    render_stage_popup_html(title=title, body=body, note="Moving to the next stage...")
+    render_stage_popup_html(title=title, body=body, note="다음 단계로 이동합니다…..")
 
     time.sleep(3)
 
