@@ -641,9 +641,9 @@ THEME_ICONS = {
 
 # 스테이지 팝업에 사용할 표시명(요청: Valley/Fortress/Castle)
 STAGE_DISPLAY_NAMES = {
-    "subcontracting": "하도급의 계곡",
-    "security": "정보보안의 요새",
-    "fairtrade": "공정거래의 성",
+    "subcontracting": "Valley of Subcontracting",
+    "security": "Fortress of Information Security",
+    "fairtrade": "Castle of Fair Trade",
 }
 
 
@@ -2330,7 +2330,7 @@ def _build_participant_snapshot(df: pd.DataFrame):
 
 def render_intro_org_cumulative_board():
     """메인 화면 전용: 기관별 누적 점수/참여 현황 대시보드 (참여자용 요약 뷰)."""
-    st.markdown("### 🏢 기관별 누적 점수 및 참여 현황")
+    st.markdown("### 🏢 Cumulative score and participation status by institution")
 
     df, err = _load_log_df()
     if err:
@@ -3671,9 +3671,9 @@ elif st.session_state.stage == "stage_transition":
     score_10 = int(info.get("score_10") or 0)
     max_10 = int(info.get("max_10") or 10)
 
-    title = f"{name} 클리어했습니다. {stage_num} \"{stage_name}\""
-    body = f"획득 점수: {score_10}/{max_10}"
-    render_stage_popup_html(title=title, body=body, note="다음 단계로 이동합니다…..")
+    title = f"{name} has cleared Stage {stage_num} \"{stage_name}\""
+    body = f"Score: {score_10}/{max_10}"
+    render_stage_popup_html(title=title, body=body, note="Moving to the next stage...")
 
     time.sleep(3)
 
