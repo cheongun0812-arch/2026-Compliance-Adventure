@@ -1,3 +1,19 @@
+
+def render_stage_popup_html(title: str, body: str, note: str = ""):
+    """중앙 스테이지 클리어 팝업(HTML 오버레이)."""
+    st.markdown(
+        f"""
+        <div class="stage-popup-overlay">
+          <div class="stage-popup-box">
+            <div class="stage-popup-title">{html.escape(title)}</div>
+            <div class="stage-popup-body">{html.escape(body)}</div>
+            {f'<div class="stage-popup-note">{html.escape(note)}</div>' if note else ''}
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
 import streamlit as st
 from datetime import datetime
 from pathlib import Path
@@ -12,10 +28,6 @@ try:
     from streamlit.errors import StreamlitInvalidHeightError
 except Exception:
     StreamlitInvalidHeightError = Exception
-try:
-    from streamlit.errors import StreamlitAPIException
-except Exception:
-    StreamlitAPIException = Exception
 import streamlit.components.v1 as components
 import os
 import re
@@ -427,6 +439,41 @@ div[data-testid="stDialog"] button[kind="header"] svg {
     margin-bottom: 8px;
 }
 
+
+/* 중앙 팝업 오버레이 (스테이지 클리어 안내) */
+.stage-popup-overlay{
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.55);
+    z-index: 9999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.stage-popup-box{
+    background: #F7F9FF;
+    color: #172233;
+    width: min(560px, 92vw);
+    border-radius: 16px;
+    padding: 18px 20px;
+    border: 1px solid #D7E2FF;
+    box-shadow: 0 18px 60px rgba(0,0,0,0.35);
+}
+.stage-popup-title{
+    font-size: 1.05rem;
+    font-weight: 900;
+    margin-bottom: 6px;
+}
+.stage-popup-body{
+    font-size: 0.98rem;
+    line-height: 1.55;
+    opacity: 0.95;
+}
+.stage-popup-note{
+    margin-top: 10px;
+    font-size: 0.88rem;
+    opacity: 0.75;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -592,6 +639,14 @@ THEME_ICONS = {
 }
 
 
+# 스테이지 팝업에 사용할 표시명(요청: Valley/Fortress/Castle)
+STAGE_DISPLAY_NAMES = {
+    "subcontracting": "Valley of Subcontracting",
+    "security": "Fortress of Information Security",
+    "fairtrade": "Castle of Fair Trade",
+}
+
+
 EMPLOYEE_MASTER_CANDIDATE_NAMES = [
     "employee_master.xlsx", "employee_master.csv",
     "employee_list.xlsx", "employee_list.csv",
@@ -647,7 +702,7 @@ SCENARIOS = {'subcontracting': {'title': '🚜 하도급의 계곡',
                                                '감액 검토 시 정당한 사유·산정근거·협의내용을 서면으로 남기기']},
                     'quiz': [{'type': 'mcq',
                               'code': 'SC-1',
-                              'score': 35,
+                              'score': 10,
                               'question': '하도급 업무에서 착공 전 가장 먼저 확인해야 할 항목은 무엇인가요?',
                               'options': ['서면 계약(발주서 포함) 발급 여부와 핵심 조건 명시 여부',
                                           '현장 인력 배치 완료 여부',
@@ -663,7 +718,7 @@ SCENARIOS = {'subcontracting': {'title': '🚜 하도급의 계곡',
                               'wrong_extra': '실무에서는 “급해서 먼저”라는 말이 자주 나오지만, 서면 누락은 추후 부당감액·책임공방의 핵심 쟁점이 됩니다.'},
                              {'type': 'mcq',
                               'code': 'SC-2',
-                              'score': 35,
+                              'score': 10,
                               'question': '작업 도중 발주 범위가 늘어나 단가 조정이 필요한 상황입니다. 가장 적절한 조치는 무엇인가요?',
                               'options': ['변경 내용을 메신저로만 남기고 기존 계약대로 정산한다',
                                           '변경 범위·단가·납기를 서면(변경합의/발주서)으로 확정 후 진행한다',
@@ -679,7 +734,7 @@ SCENARIOS = {'subcontracting': {'title': '🚜 하도급의 계곡',
                               'wrong_extra': '분쟁사례에서는 “현장 구두지시”가 있었는지, 누가 승인했는지가 핵심 쟁점이 됩니다. 문서화가 가장 강력한 예방책입니다.'},
                              {'type': 'text',
                               'code': 'SC-3',
-                              'score': 30,
+                              'score': 10,
                               'question': '나는 협력사 정산을 검토 중인데, 검수결과나 하자 근거 없이 대금을 일괄 감액하라는 요청을 받았습니다. 이 상황에서 내가 어떻게 처리할지 짧게 작성해보세요. (원칙 + 근거 확인 + 대안 포함)',
                               'sample_answer': '정당한 사유와 객관적 근거 없이 하도급대금을 바로 감액하지 않겠습니다. 먼저 검수결과·하자 여부·산정 근거를 확인하고, 조정이 필요하면 협의 내용과 정산 기준을 서면으로 남겨 처리하겠습니다.',
                               'model_answer': '예시 답변: “하도급대금은 정당한 사유와 객관적 산정 근거 없이 일괄 감액하면 분쟁과 법 위반 소지가 있으므로 바로 감액 처리하지 않겠습니다. 우선 검수결과와 하자 귀책, 감액 산정 근거를 확인하고, 조정이 필요하면 협의 내용과 정산 기준을 서면으로 남긴 뒤 처리하겠습니다.”',
@@ -700,7 +755,7 @@ SCENARIOS = {'subcontracting': {'title': '🚜 하도급의 계곡',
                                          '초동보고에는 사고상황·즉시조치·추가점검 요청을 함께 적기']},
               'quiz': [{'type': 'mcq',
                         'code': 'IS-1',
-                        'score': 35,
+                        'score': 10,
                         'question': '다음 중 피싱 메일 가능성이 가장 높은 징후는 무엇인가요?',
                         'options': ['회사 공지 메일에 사내 포털 링크가 포함되어 있다',
                                     '발신자 주소가 유사하지만 다른 도메인이고, 압축파일 실행을 요구한다',
@@ -716,7 +771,7 @@ SCENARIOS = {'subcontracting': {'title': '🚜 하도급의 계곡',
                         'wrong_extra': '“바빠서 일단 열어보자”가 사고의 출발점이 됩니다. 의심되면 클릭 전에 보안팀 확인이 우선입니다.'},
                        {'type': 'mcq',
                         'code': 'IS-2',
-                        'score': 35,
+                        'score': 10,
                         'question': '직원이 피싱 페이지에 계정정보를 입력한 사실을 뒤늦게 알게 되었습니다. 가장 우선해야 할 조치는?',
                         'options': ['본인 PC만 재부팅하고 아무에게도 알리지 않는다',
                                     '다음날 출근 후 천천히 비밀번호를 바꾼다',
@@ -732,7 +787,7 @@ SCENARIOS = {'subcontracting': {'title': '🚜 하도급의 계곡',
                         'wrong_extra': '실제 사고 대응에서 보고 지연은 추가 접속·권한남용을 허용해 피해를 확대시키는 원인이 됩니다.'},
                        {'type': 'text',
                         'code': 'IS-3',
-                        'score': 30,
+                        'score': 10,
                         'question': '나는 의심 메일 링크를 클릭한 뒤 계정정보 입력 가능성을 확인했습니다. 이 상황에서 내가 즉시 해야 할 조치와 보고 방향을 짧게 작성해보세요. (상황 + 즉시 조치 + 보고/요청 포함)',
                         'sample_answer': '의심 링크 클릭으로 계정정보 노출 가능성이 있어 즉시 비밀번호를 변경하고 추가 로그인 여부를 확인하겠습니다. 동시에 보안담당자와 헬프데스크에 사고 사실을 보고하고 접속기록 점검을 요청하겠습니다.',
                         'model_answer': '예시 답변: “의심 메일 링크 클릭으로 계정정보가 노출됐을 가능성이 있어 즉시 비밀번호를 변경하고 필요한 경우 로그아웃/차단 조치를 진행하겠습니다. 이후 보안담당자와 헬프데스크에 사고 사실을 바로 보고하고, 계정 접속기록 점검과 추가 대응 안내를 요청하겠습니다.”',
@@ -753,7 +808,7 @@ SCENARIOS = {'subcontracting': {'title': '🚜 하도급의 계곡',
                                           '모든 업체에 동일 기준으로 답변되도록 공식 질의 채널로만 접수받기']},
                'quiz': [{'type': 'mcq',
                          'code': 'FT-1',
-                         'score': 35,
+                         'score': 10,
                          'question': '평가를 앞둔 협력사가 “작은 감사 표시”라며 상품권을 전달하려고 합니다. 가장 적절한 대응은?',
                          'options': ['금액이 작으면 받고 넘어간다',
                                      '개인적으로 거절하고 기록은 남기지 않는다',
@@ -769,7 +824,7 @@ SCENARIOS = {'subcontracting': {'title': '🚜 하도급의 계곡',
                          'wrong_extra': '분쟁·감사 시에는 “받았는지”뿐 아니라 “제안이 있었을 때 회사가 어떻게 대응했는지”도 중요하게 확인됩니다.'},
                         {'type': 'mcq',
                          'code': 'FT-2',
-                         'score': 35,
+                         'score': 10,
                          'question': '입찰 준비 중 거래처가 “평가 기준과 경쟁사 상황을 조금만 알려달라”고 요청했습니다. 가장 적절한 답변은?',
                          'options': ['관계 유지를 위해 구두로 일부 힌트만 준다',
                                      '공식 공지된 범위만 안내하고, 추가 문의는 공식 절차로 요청하도록 한다',
@@ -784,7 +839,7 @@ SCENARIOS = {'subcontracting': {'title': '🚜 하도급의 계곡',
                          'wrong_extra': '공정거래·청렴 이슈는 실제 정보 유출뿐 아니라 “특정 업체만 더 알았는가”라는 절차적 공정성 문제로도 확산됩니다.'},
                         {'type': 'text',
                          'code': 'FT-3',
-                         'score': 30,
+                         'score': 10,
                          'question': '나는 입찰 준비 중 거래처로부터 평가 기준 세부내용이나 경쟁사 관련 정보를 알려 달라는 요청을 받았습니다. 이 상황에서 내가 원칙을 지키며 어떻게 대응할지 짧게 작성해보세요. (공정성 원칙 + 거절 + 공식 채널 안내 포함)',
                          'sample_answer': '평가 관련 정보는 공정성을 위해 공개된 범위에서만 안내하겠습니다. 추가 문의는 공식 질의 채널로 접수하도록 안내하고 동일 기준으로 회신되도록 하겠습니다.',
                          'model_answer': '예시 답변: “입찰/평가 정보는 공정성과 동일기회 원칙에 따라 공개된 내용만 안내하겠습니다. 비공개 정보나 경쟁사 관련 내용은 제공하지 않고, 추가 문의는 공식 질의 채널로 접수하도록 안내해 모든 업체에 동일 기준으로 회신되도록 처리하겠습니다.”',
@@ -918,27 +973,33 @@ def theme_score_from_submissions(m_key: str):
     return int(sum(int(result.get("awarded_score", 0)) for result in subs.values()))
 
 
-def mark_theme_complete_if_ready(m_key: str):
+
+def finalize_theme_if_ready(m_key: str) -> dict:
+    """테마(스테이지) 점수 확정. '정복 연출' 등 과한 효과는 사용하지 않습니다.
+    반환값에는 스테이지 점수(10점 환산) 등 팝업에 필요한 값이 들어갑니다.
+    """
     ensure_quiz_progress(m_key)
     subs = st.session_state.quiz_progress[m_key]["submissions"]
     total_q = len(SCENARIOS[m_key]["quiz"])
-    if len(subs) == total_q:
-        st.session_state.mission_scores[m_key] = theme_score_from_submissions(m_key)
-        recalc_total_score()
-        if m_key not in st.session_state.completed:
-            st.session_state.completed.append(m_key)
-            st.session_state.last_cleared_mission = m_key
-            st.session_state.show_conquer_fx = True
-            st.session_state.map_fx_done = False
-            st.session_state.map_celebrate_theme = m_key
-            st.session_state.map_celebrate_until = float(time.time()) + 5.0
-            # 테마 정복 사운드 큐 (최종 정복은 fanfare 우선)
-            if len(st.session_state.completed) >= len(SCENARIO_ORDER):
-                queue_sfx("final")
-            else:
-                queue_sfx("conquer")
+    if len(subs) != total_q:
+        return {"ready": False}
+
+    # 테마 점수 확정
+    raw = int(theme_score_from_submissions(m_key))
+    max_raw = int(theme_max_score(m_key)) or 1
+    st.session_state.mission_scores[m_key] = raw
+    recalc_total_score()
+
+    if m_key not in st.session_state.completed:
+        st.session_state.completed.append(m_key)
+        st.session_state.last_cleared_mission = m_key
+
+    # 스테이지(테마) 점수는 10점 환산으로 표시
+    scaled_10 = int(round((raw / max_raw) * 10))
+    scaled_10 = max(0, min(10, scaled_10))
+    return {"ready": True, "raw": raw, "max_raw": max_raw, "scaled_10": scaled_10, "scaled_max": 10}
 # =========================================================
-# 5) 유틸 함수 (이미지 / 사운드 / 로그 / 평가)
+# 5) 유틸 함수 (이미지 / 사운드 / 평가)
 # =========================================================
 def get_current_map_image():
     stage_idx = min(len(st.session_state.get("completed", [])), 3)
@@ -1974,11 +2035,11 @@ def _clear_retry_offer():
 def start_training_attempt_session(user_info: dict, attempt_round: int, *, skip_to_stage: str = "map"):
     user_info = dict(user_info or {})
     keep_keys = {
-    "admin_authed": st.session_state.get("admin_authed", False),
-    # NOTE: bgm_enabled is controlled by a checkbox widget; do NOT set it here (StreamlitAPIException).
-    "employee_lookup_candidates": st.session_state.get("employee_lookup_candidates", []),
-    "employee_selected_record": st.session_state.get("employee_selected_record"),
-    "employee_lookup_modal_open": False,
+        "admin_authed": st.session_state.get("admin_authed", False),
+        "audio_debug": st.session_state.get("audio_debug", False),
+        "employee_lookup_candidates": st.session_state.get("employee_lookup_candidates", []),
+        "employee_selected_record": st.session_state.get("employee_selected_record"),
+        "employee_lookup_modal_open": False,
     }
 
     st.session_state.user_info = {
@@ -2008,11 +2069,7 @@ def start_training_attempt_session(user_info: dict, attempt_round: int, *, skip_
     st.session_state.training_attempt_id = f"run-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8]}"
 
     for k, v in keep_keys.items():
-        try:
-            st.session_state[k] = v
-        except StreamlitAPIException:
-            # Some keys may be bound to widgets already created in this run; skip to avoid crash.
-            pass
+        st.session_state[k] = v
 
     award_participation_points_if_needed()
 
@@ -2035,19 +2092,26 @@ def render_retry_offer_box(context: str):
     org = html.escape(str(user.get("org", user.get("organization", "")) or "미분류"))
 
     if next_round >= max_attempts:
-        title = "⚠️ 마지막 재도전 안내"
-        desc = "이번이 마지막 기회입니다. 충분히 학습한 뒤 집중해서 도전하세요. 더 높은 점수를 받으면 기관 누적/평균 점수에도 자동으로 반영됩니다."
+        title = "⚠️ Bonus attempt (3rd) notice"
+        desc = (
+            "This is your last chance. Attempt 3 is a bonus learning opportunity and will NOT affect "
+            "your institution’s cumulative/average score. Focus on learning and challenge again."
+        )
     else:
-        title = "🔄 재참여(재도전) 안내"
-        desc = "점수가 아쉽더라도 반복 참여는 제한됩니다. 재참여는 최대 2회까지 가능하며, 더 높은 점수를 받은 회차가 기관 누적/평균 점수에 자동 반영됩니다."
+        title = "🔄 Re-participation (Re-challenge) information"
+        desc = (
+            "Re-participation is limited. You may re-participate up to two additional times (max 3 attempts). "
+            "For institution scores, the higher score between Attempts 1 and 2 will be reflected in the "
+            "cumulative/average score after the round ends."
+        )
 
     st.markdown(
         f"""
         <div class="retry-offer-card">
           <div class="retry-offer-title">{title}</div>
-          <div class="retry-offer-body"><b>{name}</b> ({org}) · 현재 완료 회차 <b>{completed_attempts}회</b> / 최대 <b>{max_attempts}회</b></div>
+          <div class="retry-offer-body"><b>{name}</b> ({org}) · Status: Completed <b>{completed_attempts}</b> / Max <b>{max_attempts}</b> attempts</div>
           <div class="retry-offer-desc">{desc}</div>
-          <div class="retry-offer-note">선택 시 메인 화면을 건너뛰고 Stage 1부터 새 회차로 바로 시작합니다. (남은 재도전 기회: {remaining_after}회)</div>
+          <div class="retry-offer-note">If selected, it will skip the main screen and start directly from Stage 1. (Remaining retry opportunities: {remaining_after})</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -2182,16 +2246,41 @@ def _build_participant_snapshot(df: pd.DataFrame):
     )
     attempt_meta = attempt_meta.merge(submission_meta, on="learner_id", how="left")
 
-    best_attempt = per_attempt.sort_values(
-        ["learner_id", "total_score", "is_completed", "answered_questions", "last_activity"],
+    # Institution score policy:
+    # - Attempts 1–2: institution score reflects the higher score between rounds 1 and 2.
+    # - Attempt 3 is a bonus learning opportunity and does NOT affect institution score.
+    per_attempt["latest_attempt_round"] = pd.to_numeric(per_attempt["latest_attempt_round"], errors="coerce").fillna(1).astype(int)
+    per_attempt["latest_attempt_round"] = per_attempt["latest_attempt_round"].clip(lower=1).astype(int)
+
+    per_attempt_counted = per_attempt[per_attempt["latest_attempt_round"] <= 2].copy()
+    if per_attempt_counted.empty:
+        # Fallback (should be rare): if no round<=2 exists, use all attempts for display.
+        per_attempt_counted = per_attempt.copy()
+
+    best_attempt_institution = per_attempt_counted.sort_values(
+        ["learner_id", "is_completed", "total_score", "answered_questions", "last_activity"],
         ascending=[True, False, False, False, False]
     ).drop_duplicates(subset=["learner_id"], keep="first")
 
-    participants = best_attempt.merge(attempt_meta, on="learner_id", how="left")
+    best_attempt_any = per_attempt.sort_values(
+        ["learner_id", "is_completed", "total_score", "answered_questions", "last_activity"],
+        ascending=[True, False, False, False, False]
+    ).drop_duplicates(subset=["learner_id"], keep="first")
+
+    participants = best_attempt_institution.merge(attempt_meta, on="learner_id", how="left")
     participants["completed_attempts"] = participants["completed_attempts"].fillna(0).astype(int)
     participants["attempts_started"] = participants["attempts_started"].fillna(0).astype(int)
     participants["is_completed"] = participants["is_completed"].fillna(False).astype(bool)
-    participants["status"] = participants["is_completed"].map({True: "수료(최고점 반영)", False: "진행중(최고점 기준)"})
+
+    # Scores
+    participants["institution_score"] = pd.to_numeric(participants["total_score"], errors="coerce").fillna(0).astype(int)
+    participants["personal_best_score"] = pd.to_numeric(participants["best_score_any"], errors="coerce").fillna(0).astype(int)
+
+    # Status label (institution score policy)
+    participants["status"] = participants["is_completed"].map({
+        True: "Completed (Institution score: best of Attempts 1–2)",
+        False: "In progress (Institution score: best of Attempts 1–2)"
+    })
 
     org_summary = (
         participants.groupby("organization", as_index=False)
@@ -2220,6 +2309,10 @@ def _build_participant_snapshot(df: pd.DataFrame):
     ).reset_index(drop=True)
 
     participants_view = participants.copy()
+    # For admin views: show both institution score and personal best (incl. attempt 3, if any)
+    if "personal_best_score" in participants_view.columns:
+        participants_view["Personal best score (all attempts)"] = participants_view["personal_best_score"]
+    participants_view["Institution-reflected score"] = participants_view["total_score"]
     participants_view["last_activity"] = pd.to_datetime(participants_view["last_activity"], errors="coerce").dt.strftime("%Y-%m-%d %H:%M").fillna("-")
     participants_view["last_activity_all"] = pd.to_datetime(participants_view["last_activity_all"], errors="coerce").dt.strftime("%Y-%m-%d %H:%M").fillna("-")
     participants_view = participants_view.sort_values(["total_score", "last_activity"], ascending=[False, False])
@@ -2838,48 +2931,44 @@ def render_admin_question_stats():
 # 6) UI 조각들 (맵, 브리핑, 퀴즈)
 # =========================================================
 
-def _render_center_popup(message_html: str):
-    """중앙 팝업(자동 닫힘/전환용)"""
+def render_conquer_fx_if_needed():
+    if not st.session_state.get("show_conquer_fx", False):
+        return
+    if st.session_state.get("map_fx_done", False):
+        return
+
+    pending_theme = st.session_state.get("last_cleared_mission")
+    is_final_clear = len(st.session_state.get("completed", [])) >= len(SCENARIO_ORDER)
+
+    if is_final_clear:
+        msg = "🏁 최종 테마 정복 완료!"
+        style = "border:1px solid rgba(250,204,21,.45); background: linear-gradient(90deg, rgba(250,204,21,.14), rgba(59,130,246,.10)); color:#FFF6D8;"
+    else:
+        title = SCENARIOS.get(str(pending_theme), {}).get("title", "테마")
+        title_plain = title.split(" ", 1)[1] if " " in title else title
+        msg = f"✨ {html.escape(title_plain)} 정복 완료! 가디언 맵이 업데이트되었습니다."
+        style = "border:1px solid rgba(74, 222, 128, .35); background: linear-gradient(90deg, rgba(16,185,129,.12), rgba(59,130,246,.08)); color:#EAFBF1;"
+
     st.markdown(
         f"""
-        <div style="position:fixed; inset:0; z-index:9999; display:flex; align-items:center; justify-content:center;">
-          <div style="position:absolute; inset:0; background:rgba(0,0,0,.55);"></div>
-          <div style="
-                position:relative;
-                width:min(760px, 92vw);
-                background:#111827;
-                border:1px solid rgba(99,102,241,.40);
-                box-shadow:0 18px 44px rgba(0,0,0,.55);
-                border-radius:16px;
-                padding:18px 20px;
-                color:#F3F4F6;
-                text-align:center;
-            ">
-            {message_html}
-          </div>
+        <div class="stage-clear-banner" style="margin:6px 0 12px 0; padding:10px 14px; border-radius:12px; {style} font-weight:700;">
+            {msg}
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-
-def _stage_points_out_of_10(m_key: str) -> int:
-    """테마 점수(예: 30점 만점)를 10점 만점으로 환산해 표시."""
     try:
-        scored = float(theme_score_from_submissions(m_key))
-        mx = float(theme_max_score(m_key))
-        if mx <= 0:
-            return 0
-        val = round((scored / mx) * 10)
-        return int(max(0, min(10, val)))
+        st.toast("🏁 최종 테마 정복 완료!" if is_final_clear else "가디언 맵 업데이트!", icon="🎉" if is_final_clear else "🗺️")
     except Exception:
-        return 0
+        pass
+    try:
+        st.balloons()
+    except Exception:
+        pass
 
-def render_conquer_fx_if_needed():
-    # 요청: 스테이지별 화려한 이펙트(풍선/토스트/배너) 제거. 최종 축하 연출은 ending 화면에서만 처리.
-    st.session_state.show_conquer_fx = False
     st.session_state.map_fx_done = True
-    return
+    st.session_state.show_conquer_fx = False
 
 
 def render_guardian_map():
@@ -3212,7 +3301,12 @@ def render_text_question(m_key: str, q_idx: int, q_data: dict):
         st.rerun()
 
 
+
 def render_quiz_navigation_controls(m_key: str):
+    """퀴즈 이전/다음 + 스테이지 제출 버튼.
+    - Stage 1~2: 제출 시 3초 팝업 후 자동 다음 스테이지로 이동
+    - Stage 3: 제출 시 최종 제출(YES) / 재도전(Try again) 선택 팝업
+    """
     ensure_quiz_progress(m_key)
     progress = st.session_state.quiz_progress[m_key]
     q_list = SCENARIOS[m_key]["quiz"]
@@ -3239,13 +3333,49 @@ def render_quiz_navigation_controls(m_key: str):
                 st.rerun()
         else:
             all_submitted = len(submissions) == total_q
-            mark_theme_complete_if_ready(m_key)
-            if st.button("🏁 테마 정복 완료! 맵으로 돌아가기", key=f"nav_finish_{m_key}", use_container_width=True, disabled=(not all_submitted)):
-                st.session_state.stage = "map"
-                st.rerun()
+            if st.button("✅ 스테이지 제출", key=f"nav_submit_stage_{m_key}", use_container_width=True, disabled=(not all_submitted)):
+                info = finalize_theme_if_ready(m_key)
+                if not info.get("ready"):
+                    st.warning("아직 모든 문항이 제출되지 않았습니다.")
+                    st.stop()
+
+                # Stage 번호 및 다음 스테이지 결정
+                stage_num = SCENARIO_ORDER.index(m_key) + 1
+                user = st.session_state.get("user_info", {})
+                name = str(user.get("name", "") or "참가자")
+                stage_name = STAGE_DISPLAY_NAMES.get(m_key, SCENARIOS[m_key].get("territory_name", SCENARIOS[m_key].get("title", m_key)))
+
+                if stage_num < len(SCENARIO_ORDER):
+                    next_key = SCENARIO_ORDER[stage_num]  # 다음 스테이지 key
+                    st.session_state.stage_transition = {
+                        "kind": "auto_next",
+                        "stage_num": stage_num,
+                        "theme_key": m_key,
+                        "stage_name": stage_name,
+                        "name": name,
+                        "score_10": int(info.get("scaled_10", 0)),
+                        "max_10": 10,
+                        "next_key": next_key,
+                    }
+                    st.session_state.stage = "stage_transition"
+                    st.rerun()
+                else:
+                    # 마지막 스테이지: 최종 제출 여부 팝업
+                    award_participation_points_if_needed()
+                    st.session_state.stage_transition = {
+                        "kind": "final_prompt",
+                        "stage_num": stage_num,
+                        "theme_key": m_key,
+                        "stage_name": stage_name,
+                        "name": name,
+                        "total_score": int(st.session_state.get("score", 0) or 0),
+                    }
+                    st.session_state.stage = "final_prompt"
+                    st.rerun()
 
 
 def render_quiz(m_key: str):
+
     mission = SCENARIOS[m_key]
     ensure_quiz_progress(m_key)
 
@@ -3455,7 +3585,6 @@ elif st.session_state.stage == "map":
     if cap_parts:
         st.caption(" | ".join(cap_parts))
 
-    render_conquer_fx_if_needed()
     render_guardian_map()
 
     st.write("관문을 선택하세요:")
@@ -3519,10 +3648,7 @@ elif st.session_state.stage == "quiz":
         st.warning("퀴즈 정보가 없어 지도로 돌아갑니다.")
         st.session_state.stage = "map"
         st.rerun()
-
     ensure_quiz_progress(m_key)
-    if len(st.session_state.quiz_progress[m_key]["submissions"]) == len(SCENARIOS[m_key]["quiz"]):
-        mark_theme_complete_if_ready(m_key)
 
     render_quiz(m_key)
 
@@ -3530,6 +3656,94 @@ elif st.session_state.stage == "admin":
     render_top_spacer()
     render_admin_page()
 
+
+elif st.session_state.stage == "stage_transition":
+    render_top_spacer()
+    info = st.session_state.get("stage_transition") or {}
+    # 자동 다음 스테이지 이동 팝업 (3초)
+    if info.get("kind") != "auto_next":
+        st.session_state.stage = "map"
+        st.rerun()
+
+    name = str(info.get("name") or "참가자")
+    stage_num = int(info.get("stage_num") or 1)
+    stage_name = str(info.get("stage_name") or "")
+    score_10 = int(info.get("score_10") or 0)
+    max_10 = int(info.get("max_10") or 10)
+
+    title = f"{name} has cleared Stage {stage_num} \"{stage_name}\""
+    body = f"Score: {score_10}/{max_10}"
+    render_stage_popup_html(title=title, body=body, note="Moving to the next stage...")
+
+    time.sleep(3)
+
+    next_key = info.get("next_key")
+    if next_key in SCENARIOS:
+        st.session_state.current_mission = next_key
+        ensure_quiz_progress(next_key)
+        st.session_state.stage = "briefing"
+    else:
+        st.session_state.stage = "map"
+    st.rerun()
+
+elif st.session_state.stage == "final_prompt":
+    render_top_spacer()
+    info = st.session_state.get("stage_transition") or {}
+    user = st.session_state.get("user_info", {})
+    name = str(info.get("name") or user.get("name") or "참가자")
+    total_score = int(info.get("total_score") or st.session_state.get("score", 0) or 0)
+
+    # 중앙 대화상자(YES / Try again)
+    @st.dialog("🏁 Final submission")
+    def _final_submit_dialog():
+        st.markdown(f"**{name}** cleared all stages with **{total_score}/100** points (including **{PARTICIPATION_SCORE} participation points**).")
+        st.markdown("Do you want to submit the final score?")
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("Yes", use_container_width=True):
+                st.session_state.stage = "ending"
+                st.rerun()
+        with c2:
+            if st.button("Try again", use_container_width=True):
+                # 마지막 도전 안내 후 Stage 1로 이동
+                st.session_state.stage_transition = {"kind": "retry_transition", "name": name}
+                st.session_state.stage = "retry_transition"
+                st.rerun()
+
+    _final_submit_dialog()
+    st.stop()
+
+elif st.session_state.stage == "retry_transition":
+    render_top_spacer()
+    user = st.session_state.get("user_info", {})
+    name = str((st.session_state.get("stage_transition") or {}).get("name") or user.get("name") or "참가자")
+
+    # 남은 시도 횟수 확인 (총 3회)
+    current_round = int(st.session_state.get("training_attempt_round", 1) or 1)
+    if current_round >= 3:
+        render_stage_popup_html(
+            title="No more retries",
+            body="You have used all available attempts.",
+            note="Returning to the main screen...",
+        )
+        time.sleep(2)
+        st.session_state.stage = "intro"
+        st.rerun()
+
+    render_stage_popup_html(
+        title="Last challenge",
+        body="This is your last chance. Focus on studying to achieve a higher score.",
+        note="Moving to Stage 1...",
+    )
+    time.sleep(3)
+
+    # 다음 회차 시작 + Stage 1(briefing)로 바로 이동
+    next_round = current_round + 1
+    start_training_attempt_session(user, attempt_round=next_round, skip_to_stage="briefing")
+    st.session_state.current_mission = SCENARIO_ORDER[0]
+    ensure_quiz_progress(SCENARIO_ORDER[0])
+    st.session_state.stage = "briefing"
+    st.rerun()
 elif st.session_state.stage == "ending":
     render_top_spacer()
     user_name = st.session_state.user_info.get("name", "가디언")
@@ -3540,17 +3754,7 @@ elif st.session_state.stage == "ending":
     total_attempts = len(st.session_state.attempt_history)
     wrong_like = sum(1 for r in st.session_state.attempt_history if str(r.get("is_correct", "")) in ["N", "PARTIAL"])
 
-    if not st.session_state.get("ending_balloons_done", False):
-        try:
-            st.balloons()
-            time.sleep(0.2)
-            st.balloons()
-            time.sleep(0.2)
-            st.balloons()
-        except Exception:
-            pass
-        st.session_state.ending_balloons_done = True
-
+    st.balloons()
     if not st.session_state.get("played_final_fanfare", False):
         play_sfx_now("final")
         st.session_state.played_final_fanfare = True
