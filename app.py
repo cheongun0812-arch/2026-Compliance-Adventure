@@ -3501,7 +3501,7 @@ if st.session_state.stage == "intro":
     name_query = st.text_input("성함 입력 (사번 조회)", key="intro_name_query", placeholder="예: 홍길동")
     c_lookup1, c_lookup2 = st.columns([2, 1])
     with c_lookup1:
-        lookup_clicked = st.button("🔎 성명 조회", use_container_width=True)
+        lookup_clicked = st.button("🔎 참여자 조회", use_container_width=True)
     with c_lookup2:
         clear_clicked = st.button("초기화", use_container_width=True)
 
