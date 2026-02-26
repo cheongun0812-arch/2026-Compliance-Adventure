@@ -2330,7 +2330,7 @@ def _build_participant_snapshot(df: pd.DataFrame):
 
 def render_intro_org_cumulative_board():
     """메인 화면 전용: 기관별 누적 점수/참여 현황 대시보드 (참여자용 요약 뷰)."""
-    st.markdown("### 🏢 Cumulative score and participation status by institution")
+    st.markdown("### 🏢 기관별 누적 점수 및 참여 현황")
 
     df, err = _load_log_df()
     if err:
