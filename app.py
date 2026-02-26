@@ -404,7 +404,7 @@ div[data-testid="stDialog"] button[kind="header"] svg {
     color: #172233 !important;
 }
 
-/* 인트로 참가자 확인(메인화면) 읽기 전용 정보 카드 */
+/* 인트로 참여자 확인(메인화면) 읽기 전용 정보 카드 */
 .confirm-readonly-field {
     margin-top: 2px;
 }
@@ -3492,7 +3492,7 @@ if st.session_state.stage == "intro":
 
     emp_df, emp_meta_msg = load_employee_master_df()
 
-    st.markdown("### 👤 참가자 확인")
+    st.markdown("### 👤 참여자 확인")
     st.caption("사전에 업로드한 직원 명단을 기준으로 성명을 조회하고, 사번/소속기관을 확인한 뒤 시작합니다.")
 
     if emp_meta_msg:
@@ -3565,7 +3565,7 @@ if st.session_state.stage == "intro":
                     start_training_attempt_session(user_info, attempt_round=1, skip_to_stage="map")
                     st.rerun()
             else:
-                st.warning("참가자 확인 정보를 다시 선택해주세요.")
+                st.warning("참여자 확인 정보를 다시 선택해주세요.")
 
     render_retry_offer_box("intro")
 
