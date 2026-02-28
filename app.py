@@ -451,12 +451,38 @@ div[data-testid="stDialog"] button[kind="header"] svg {
 /* Gold highlight for key phrases */
 .gold {
     color: #D4AF37 !important;
-    font-weight: 800 !important;
+    font-weight: 900 !important;
+    background: rgba(212, 175, 55, 0.14) !important;
+    border: 1px solid rgba(212, 175, 55, 0.28) !important;
+    padding: 0.05rem 0.28rem !important;
+    border-radius: 0.45rem !important;
+    text-shadow: 0 0 10px rgba(212,175,55,0.22) !important;
+    white-space: normal;
 }
 .brief-chip.gold-chip {
     border-color: rgba(212,175,55,0.55) !important;
     color: #D4AF37 !important;
 }
+
+/* Toast (top-right popup) readability fix (Streamlit st.toast) */
+div[data-testid="stToast"], div[data-testid="stToast"] > div {
+    background: rgba(17,24,39,0.96) !important;
+    color: rgba(255,255,255,0.96) !important;
+    border: 1px solid rgba(212,175,55,0.25) !important;
+    box-shadow: 0 16px 45px rgba(0,0,0,0.45) !important;
+}
+div[data-testid="stToast"] * {
+    color: rgba(255,255,255,0.96) !important;
+}
+
+/* Fallback selectors for older/newer Streamlit builds */
+.stToast, .stToast > div {
+    background: rgba(17,24,39,0.96) !important;
+    color: rgba(255,255,255,0.96) !important;
+    border: 1px solid rgba(212,175,55,0.25) !important;
+}
+.stToast * { color: rgba(255,255,255,0.96) !important; }
+
 </style>
 """, unsafe_allow_html=True)
 
