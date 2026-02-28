@@ -833,6 +833,7 @@ def init_state():
         "employee_lookup_candidates": [],
         "employee_selected_record": None,
         "employee_lookup_modal_open": False,
+        "just_confirmed_employee": False,
         "retry_offer": None,
     }
     for k, v in defaults.items():
@@ -994,7 +995,9 @@ def show_map_with_fade(map_path: Path, caption: str = None, celebrate: bool = Fa
             st.caption(caption)
 
 
-def resolve_bgm_path(bgm_key: str) -> Path | None:
+from typing import Optional
+
+def resolve_bgm_path(bgm_key: str) -> Optional[Path]:
     # 1) 전체 공통 BGM 우선 사용
     for name in GLOBAL_BGM_CANDIDATE_NAMES:
         gp = BASE_DIR / name
@@ -1546,7 +1549,7 @@ def _render_confirm_readonly_field(container, label: str, value: str):
         st.markdown(
             f"""
             <div class='confirm-readonly-field'>
-              <div class='confirm-readonly-label'>{label}</div>
+              <div class='confirm-readonly-label'>{html.escape(str(label))}</div>
               <div class='confirm-readonly-value'>{html.escape(str(value or '-'))}</div>
             </div>
             """,
@@ -1562,6 +1565,7 @@ def _render_employee_lookup_popup_body(name_query: str = ""):
         st.info("조회 결과가 없습니다.")
         if st.button("닫기", key="employee_modal_close_empty", use_container_width=True):
             st.session_state.employee_lookup_modal_open = False
+            st.session_state.just_confirmed_employee = True
             st.rerun()
         return
 
@@ -1972,9 +1976,7 @@ def start_training_attempt_session(user_info: dict, attempt_round: int, *, skip_
     user_info = dict(user_info or {})
     keep_keys = {
         "admin_authed": st.session_state.get("admin_authed", False),
-        "bgm_enabled": st.session_state.get("bgm_enabled", True),
-        "audio_debug": st.session_state.get("audio_debug", False),
-        "employee_lookup_candidates": st.session_state.get("employee_lookup_candidates", []),
+                "employee_lookup_candidates": st.session_state.get("employee_lookup_candidates", []),
         "employee_selected_record": st.session_state.get("employee_selected_record"),
         "employee_lookup_modal_open": False,
     }
@@ -2007,6 +2009,9 @@ def start_training_attempt_session(user_info: dict, attempt_round: int, *, skip_
     st.session_state.training_attempt_id = f"run-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8]}"
 
     for k, v in keep_keys.items():
+        # Avoid overwriting Streamlit widget-bound keys during runtime
+        if k in ("bgm_enabled", "audio_debug"):
+            continue
         st.session_state[k] = v
 
     award_participation_points_if_needed()
@@ -2864,10 +2869,6 @@ def render_conquer_fx_if_needed():
         st.toast("🏁 최종 테마 정복 완료!" if is_final_clear else "가디언 맵 업데이트!", icon="🎉" if is_final_clear else "🗺️")
     except Exception:
         pass
-    try:
-        st.balloons()
-    except Exception:
-        pass
 
     st.session_state.map_fx_done = True
     st.session_state.show_conquer_fx = False
@@ -3338,6 +3339,19 @@ def render_quiz(m_key: str):
 # 7) 메인 화면 분기
 # =========================================================
 init_state()
+
+# --- 안정적 화면 전환: 위젯 생성 전에 '모험 시작' 요청을 처리 ---
+# Streamlit은 위젯(key=...)이 이미 생성된 실행(run)에서 같은 key를 코드로 덮어쓰면
+# StreamlitAPIException을 발생시킬 수 있습니다. (직원 화면에 에러/코드 노출 → 신뢰 저하)
+pending = st.session_state.pop("pending_start_training", None)
+if pending:
+    # pending에는 user_info / attempt_round / skip_to_stage만 들어있도록 설계
+    start_training_attempt_session(
+        pending.get("user_info", {}),
+        attempt_round=int(pending.get("attempt_round", 1) or 1),
+        skip_to_stage=str(pending.get("skip_to_stage", "map") or "map"),
+    )
+    st.rerun()
 render_audio_system()
 
 with st.sidebar:
@@ -3352,306 +3366,338 @@ with st.sidebar:
             st.session_state.admin_authed = False
             st.rerun()
 
-if st.session_state.stage == "intro":
-    render_top_spacer()
+try:
+    if st.session_state.stage == "intro":
+        render_top_spacer()
 
-    intro_map = get_current_map_image()
-    if intro_map:
-        show_map_with_fade(intro_map)
-    else:
-        st.info("맵 이미지를 추가하면 인트로 연출이 더 좋아집니다.")
-
-    st.markdown("<div style='height:10px;'></div>", unsafe_allow_html=True)
-    st.title("🛡️ 2026 Compliance Adventure")
-    st.caption("Guardian Training · 컴플라이언스 테마 정복형 학습")
-
-    st.markdown(
-        """
-        <div class='card'>
-          <div class='card-title'>게임 방식</div>
-          <div>맵에서 테마를 선택 → 핵심 브리핑 학습 → 퀴즈(4지선다 + 주관식) → 정복 완료!</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    render_intro_org_cumulative_board()
-
-    emp_df, emp_meta_msg = load_employee_master_df()
-
-    st.markdown("### 👤 참가자 확인")
-    st.caption("사전에 업로드한 직원 명단을 기준으로 성명을 조회하고, 사번/소속기관을 확인한 뒤 시작합니다.")
-
-    if emp_meta_msg:
-        st.info(emp_meta_msg)
-
-    name_query = st.text_input("성함 입력 (사번 조회)", key="intro_name_query", placeholder="예: 홍길동")
-    c_lookup1, c_lookup2 = st.columns([2, 1])
-    with c_lookup1:
-        lookup_clicked = st.button("🔎 성명 조회", use_container_width=True)
-    with c_lookup2:
-        clear_clicked = st.button("초기화", use_container_width=True)
-
-    if clear_clicked:
-        st.session_state.employee_lookup_candidates = []
-        st.session_state.employee_selected_record = None
-        st.session_state.employee_lookup_modal_open = False
-        st.rerun()
-
-    if lookup_clicked:
-        q = (name_query or "").strip()
-        st.session_state.employee_selected_record = None
-        st.session_state.employee_lookup_modal_open = False
-        if not q:
-            st.warning("성함을 입력한 뒤 조회해주세요.")
-        elif emp_df is None or emp_df.empty:
-            st.warning("직원 명단 파일을 찾지 못했습니다. app.py와 같은 폴더에 직원 명단 파일(csv/xlsx)을 넣어주세요.")
+        intro_map = get_current_map_image()
+        if intro_map:
+            show_map_with_fade(intro_map)
         else:
-            exact = emp_df[emp_df["name"].astype(str).str.strip() == q].copy()
-            partial = emp_df[emp_df["name"].astype(str).str.contains(q, case=False, na=False)].copy()
-            candidates = exact if not exact.empty else partial
-            st.session_state.employee_lookup_candidates = candidates.to_dict("records")
-            if candidates.empty:
-                st.warning("일치하는 성명이 없습니다. 성함을 다시 확인해주세요.")
-            else:
-                st.success(f"조회 결과 {len(candidates)}건 · 팝업에서 본인 정보를 확인해주세요.")
-                st.session_state.employee_lookup_modal_open = True
+            st.info("맵 이미지를 추가하면 인트로 연출이 더 좋아집니다.")
 
-    if st.session_state.get("employee_lookup_modal_open", False):
-        render_employee_lookup_popup(name_query)
-    elif st.session_state.get("employee_lookup_candidates"):
-        st.caption("최근 조회 결과가 있습니다. 다시 확인하려면 아래 버튼을 누르세요.")
-        if st.button("📋 조회 결과 팝업 다시 열기", use_container_width=True, key="reopen_employee_popup"):
-            st.session_state.employee_lookup_modal_open = True
+        st.markdown("<div style='height:10px;'></div>", unsafe_allow_html=True)
+        st.title("🛡️ 2026 Compliance Adventure")
+        st.caption("Guardian Training · 컴플라이언스 테마 정복형 학습")
+
+        st.markdown(
+            """
+            <div class='card'>
+              <div class='card-title'>게임 방식</div>
+              <div>맵에서 테마를 선택 → 핵심 브리핑 학습 → 퀴즈(4지선다 + 주관식) → 정복 완료!</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        render_intro_org_cumulative_board()
+
+        emp_df, emp_meta_msg = load_employee_master_df()
+
+        st.markdown("### 👤 참가자 확인")
+        st.caption("사전에 업로드한 직원 명단을 기준으로 성명을 조회하고, 사번/소속기관을 확인한 뒤 시작합니다.")
+
+        if emp_meta_msg:
+            st.info(emp_meta_msg)
+
+        name_query = st.text_input("성함 입력 (사번 조회)", key="intro_name_query", placeholder="예: 홍길동")
+        c_lookup1, c_lookup2 = st.columns([2, 1])
+        with c_lookup1:
+            lookup_clicked = st.button("🔎 성명 조회", use_container_width=True)
+        with c_lookup2:
+            clear_clicked = st.button("초기화", use_container_width=True)
+
+        if clear_clicked:
+            st.session_state.employee_lookup_candidates = []
+            st.session_state.employee_selected_record = None
+            st.session_state.employee_lookup_modal_open = False
             st.rerun()
 
-    selected_emp = st.session_state.get("employee_selected_record")
-    if selected_emp:
-        st.markdown("### ✅ 확인된 참가자 정보")
-        col_a, col_b, col_c = st.columns(3)
-        _render_confirm_readonly_field(col_a, "사번", selected_emp.get("employee_no", ""))
-        _render_confirm_readonly_field(col_b, "이름", selected_emp.get("name", ""))
-        _render_confirm_readonly_field(col_c, "소속 기관", selected_emp.get("organization", ""))
-
-        st.markdown("<div style='height:6px;'></div>", unsafe_allow_html=True)
-        if st.button("모험 시작하기", use_container_width=True):
-            emp_no = str(selected_emp.get("employee_no", "")).strip()
-            emp_name = str(selected_emp.get("name", "")).strip()
-            emp_org = str(selected_emp.get("organization", "")).strip() or "미분류"
-            if emp_name:
-                user_info = {"employee_no": emp_no, "name": emp_name, "org": emp_org}
-                hist = _summarize_user_attempts(emp_no, emp_name, emp_org)
-                completed_attempts = int(hist.get("completed_attempts", 0) or 0)
-
-                if completed_attempts >= 3:
-                    st.error("이 참가자는 최대 참여 횟수(총 3회)를 모두 사용했습니다. 관리자에게 문의해주세요.")
-                elif completed_attempts >= 1:
-                    _set_retry_offer(user_info, completed_attempts, context="intro")
-                    st.rerun()
+        if lookup_clicked:
+            q = (name_query or "").strip()
+            st.session_state.employee_selected_record = None
+            st.session_state.employee_lookup_modal_open = False
+            if not q:
+                st.warning("성함을 입력한 뒤 조회해주세요.")
+            elif emp_df is None or emp_df.empty:
+                st.warning("직원 명단 파일을 찾지 못했습니다. app.py와 같은 폴더에 직원 명단 파일(csv/xlsx)을 넣어주세요.")
+            else:
+                exact = emp_df[emp_df["name"].astype(str).str.strip() == q].copy()
+                partial = emp_df[emp_df["name"].astype(str).str.contains(q, case=False, na=False)].copy()
+                candidates = exact if not exact.empty else partial
+                st.session_state.employee_lookup_candidates = candidates.to_dict("records")
+                if candidates.empty:
+                    st.warning("일치하는 성명이 없습니다. 성함을 다시 확인해주세요.")
                 else:
-                    start_training_attempt_session(user_info, attempt_round=1, skip_to_stage="map")
-                    st.rerun()
-            else:
-                st.warning("참가자 확인 정보를 다시 선택해주세요.")
+                    st.success(f"조회 결과 {len(candidates)}건 · 팝업에서 본인 정보를 확인해주세요.")
+                    st.session_state.employee_lookup_modal_open = True
 
-    render_retry_offer_box("intro")
+        if st.session_state.get("employee_lookup_modal_open", False):
+            render_employee_lookup_popup(name_query)
+        elif st.session_state.get("employee_lookup_candidates"):
+            st.caption("최근 조회 결과가 있습니다. 다시 확인하려면 아래 버튼을 누르세요.")
+            if st.button("📋 조회 결과 팝업 다시 열기", use_container_width=True, key="reopen_employee_popup"):
+                st.session_state.employee_lookup_modal_open = True
+                st.rerun()
 
-elif st.session_state.stage == "map":
-    render_top_spacer()
-    user_name = st.session_state.user_info.get("name", "가디언")
-    user_org = st.session_state.user_info.get("org", "")
+        selected_emp = st.session_state.get("employee_selected_record")
+        if selected_emp:
+            st.markdown("<div id='start-adventure-anchor'></div>", unsafe_allow_html=True)
 
-    st.title(f"🗺️ {user_name} 가디언의 지도")
-    cap_parts = []
-    user_emp_no = st.session_state.user_info.get("employee_no", "")
-    if user_emp_no:
-        cap_parts.append(f"사번: {user_emp_no}")
-    if user_org:
-        cap_parts.append(f"소속 기관: {user_org}")
-    if cap_parts:
-        st.caption(" | ".join(cap_parts))
+            # 방금 팝업에서 '이 정보로 확인'을 눌렀다면, 아래 시작 영역으로 자동 스크롤
+            if st.session_state.get('just_confirmed_employee', False):
+                st.session_state.just_confirmed_employee = False
+                try:
+                    components.html(
+                        """
+                        <script>
+                          (function() {
+                            const el = window.parent.document.getElementById('start-adventure-anchor');
+                            if (el) { el.scrollIntoView({behavior:'smooth', block:'start'}); }
+                          })();
+                        </script>
+                        """,
+                        height=0,
+                    )
+                except Exception:
+                    pass
 
-    render_conquer_fx_if_needed()
-    render_guardian_map()
+            st.markdown('### ✅ 확인된 참가자 정보')
+            col_a, col_b, col_c = st.columns(3)
+            _render_confirm_readonly_field(col_a, '사번', selected_emp.get('employee_no', ''))
+            _render_confirm_readonly_field(col_b, '이름', selected_emp.get('name', ''))
+            _render_confirm_readonly_field(col_c, '소속 기관', selected_emp.get('organization', ''))
 
-    st.write("관문을 선택하세요:")
-    cols = st.columns(3)
-    for i, m_key in enumerate(SCENARIO_ORDER):
-        mission = SCENARIOS[m_key]
-        status = get_theme_status(m_key)
-        with cols[i]:
-            if status == "clear":
-                score = st.session_state.mission_scores.get(m_key, 0)
-                _mx = max(theme_max_score(m_key), 1)
-                _rt = score / _mx
-                badge = "🏅" if _rt >= 0.9 else ("✅" if _rt >= 0.7 else "📘")
-                st.success(f"{badge} {mission['title']}")
-                st.caption(f"점수 {score}/{theme_max_score(m_key)}")
-            elif status == "open":
-                if st.button(f"{mission['title']} 진입", key=f"enter_{m_key}", use_container_width=True):
-                    st.session_state.current_mission = m_key
-                    ensure_quiz_progress(m_key)
-                    st.session_state.stage = "briefing"
-                    st.rerun()
-            else:
-                st.button("🔒 잠겨 있음", key=f"locked_{m_key}", disabled=True, use_container_width=True)
+            st.markdown("<div style='height:6px;'></div>", unsafe_allow_html=True)
+            if st.button('모험 시작하기', use_container_width=True):
+                emp_no = str(selected_emp.get('employee_no', '')).strip()
+                emp_name = str(selected_emp.get('name', '')).strip()
+                emp_org = str(selected_emp.get('organization', '')).strip() or '미분류'
+                if emp_name:
+                    user_info = {'employee_no': emp_no, 'name': emp_name, 'org': emp_org}
+                    hist = _summarize_user_attempts(emp_no, emp_name, emp_org)
+                    completed_attempts = int(hist.get('completed_attempts', 0) or 0)
 
-    st.write("---")
-    st.markdown(
-        f"""
-        <div class='card'>
-          <div class='card-title'>🏆 현재 점수</div>
-          <div><b>{st.session_state.score} / {TOTAL_SCORE}</b> · 등급 예상: {get_grade(st.session_state.score, TOTAL_SCORE)}</div>
-          <div style='font-size:0.88rem; opacity:.9;'>구성: 객관식 60점 + 주관식 30점 + 참여 10점</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+                    if completed_attempts >= 3:
+                        st.error('이 참가자는 최대 참여 횟수(총 3회)를 모두 사용했습니다. 관리자에게 문의해주세요.')
+                    elif completed_attempts >= 1:
+                        _set_retry_offer(user_info, completed_attempts, context='intro')
+                        st.rerun()
+                    else:
+                        st.session_state.pending_start_training = {'user_info': user_info, 'attempt_round': 1, 'skip_to_stage': 'map'}
+                        st.rerun()
+                else:
+                    st.warning('참가자 확인 정보를 다시 선택해주세요.')
+        render_retry_offer_box("intro")
 
-    if len(st.session_state.completed) == len(SCENARIO_ORDER):
-        if st.button("최종 결과 보기", use_container_width=True):
-            st.session_state.stage = "ending"
-            st.rerun()
+    elif st.session_state.stage == "map":
+        render_top_spacer()
+        user_name = st.session_state.user_info.get("name", "가디언")
+        user_org = st.session_state.user_info.get("org", "")
 
-elif st.session_state.stage == "briefing":
-    render_top_spacer()
-    m_key = st.session_state.get("current_mission")
-    if not m_key or m_key not in SCENARIOS:
-        st.warning("테마 정보가 없어 지도로 돌아갑니다.")
-        st.session_state.stage = "map"
-        st.rerun()
+        st.title(f"🗺️ {user_name} 가디언의 지도")
+        cap_parts = []
+        user_emp_no = st.session_state.user_info.get("employee_no", "")
+        if user_emp_no:
+            cap_parts.append(f"사번: {user_emp_no}")
+        if user_org:
+            cap_parts.append(f"소속 기관: {user_org}")
+        if cap_parts:
+            st.caption(" | ".join(cap_parts))
 
-    if m_key in st.session_state.completed:
-        st.info("이미 정복한 테마입니다. 지도로 돌아갑니다.")
-        st.session_state.stage = "map"
-        st.rerun()
+        render_conquer_fx_if_needed()
+        render_guardian_map()
 
-    render_briefing(m_key)
+        st.write("관문을 선택하세요:")
+        cols = st.columns(3)
+        for i, m_key in enumerate(SCENARIO_ORDER):
+            mission = SCENARIOS[m_key]
+            status = get_theme_status(m_key)
+            with cols[i]:
+                if status == "clear":
+                    score = st.session_state.mission_scores.get(m_key, 0)
+                    _mx = max(theme_max_score(m_key), 1)
+                    _rt = score / _mx
+                    badge = "🏅" if _rt >= 0.9 else ("✅" if _rt >= 0.7 else "📘")
+                    st.success(f"{badge} {mission['title']}")
+                    st.caption(f"점수 {score}/{theme_max_score(m_key)}")
+                elif status == "open":
+                    if st.button(f"{mission['title']} 진입", key=f"enter_{m_key}", use_container_width=True):
+                        st.session_state.current_mission = m_key
+                        ensure_quiz_progress(m_key)
+                        st.session_state.stage = "briefing"
+                        st.rerun()
+                else:
+                    st.button("🔒 잠겨 있음", key=f"locked_{m_key}", disabled=True, use_container_width=True)
 
-elif st.session_state.stage == "quiz":
-    render_top_spacer()
-    m_key = st.session_state.get("current_mission")
-    if not m_key or m_key not in SCENARIOS:
-        st.warning("퀴즈 정보가 없어 지도로 돌아갑니다.")
-        st.session_state.stage = "map"
-        st.rerun()
-
-    ensure_quiz_progress(m_key)
-    if len(st.session_state.quiz_progress[m_key]["submissions"]) == len(SCENARIOS[m_key]["quiz"]):
-        mark_theme_complete_if_ready(m_key)
-
-    render_quiz(m_key)
-
-elif st.session_state.stage == "admin":
-    render_top_spacer()
-    render_admin_page()
-
-elif st.session_state.stage == "ending":
-    render_top_spacer()
-    user_name = st.session_state.user_info.get("name", "가디언")
-    user_org = st.session_state.user_info.get("org", "")
-    score = st.session_state.score
-    grade = get_grade(score, TOTAL_SCORE)
-
-    total_attempts = len(st.session_state.attempt_history)
-    wrong_like = sum(1 for r in st.session_state.attempt_history if str(r.get("is_correct", "")) in ["N", "PARTIAL"])
-
-    st.balloons()
-    if not st.session_state.get("played_final_fanfare", False):
-        play_sfx_now("final")
-        st.session_state.played_final_fanfare = True
-
-    st.title("🏆 Guardian Training Complete")
-    st.success(f"{user_name} 가디언님, 모든 테마를 정복했습니다!")
-
-    _ending_img = get_ending_image()
-    if _ending_img:
-        st.image(str(_ending_img), use_container_width=True)
-
-    st.markdown("<div class='brief-actions-wrap'></div>", unsafe_allow_html=True)
-    c1, c2 = st.columns([1, 1], gap='large')
-    with c1:
+        st.write("---")
         st.markdown(
             f"""
             <div class='card'>
-              <div class='card-title'>최종 결과</div>
-              <div>소속 기관: <b>{user_org or "-"}</b></div><div>사번: <b>{st.session_state.user_info.get("employee_no","-") or "-"}</b></div>
-              <div>총점: <b>{score} / {TOTAL_SCORE}</b></div>
-              <div style='font-size:0.9rem; opacity:.9;'>객관식 60점 + 주관식 30점 + 참여 10점</div>
-              <div>등급: <b>{grade}</b></div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-    with c2:
-        theme_lines = []
-        for m_key in SCENARIO_ORDER:
-            t = SCENARIOS[m_key]["title"]
-            s = st.session_state.mission_scores.get(m_key, 0)
-            theme_lines.append(f"<li>{t}: <b>{s}/{theme_max_score(m_key)}</b></li>")
-        st.markdown(
-            f"""
-            <div class='card'>
-              <div class='card-title'>테마별 점수</div>
-              <ul>{''.join(theme_lines)}</ul>
+              <div class='card-title'>🏆 현재 점수</div>
+              <div><b>{st.session_state.score} / {TOTAL_SCORE}</b> · 등급 예상: {get_grade(st.session_state.score, TOTAL_SCORE)}</div>
+              <div style='font-size:0.88rem; opacity:.9;'>구성: 객관식 60점 + 주관식 30점 + 참여 10점</div>
             </div>
             """,
             unsafe_allow_html=True,
         )
 
-    st.markdown(
-        f"""
-        <div class='card'>
-          <div class='card-title'>학습 로그 요약</div>
-          <div>총 제출 횟수: <b>{total_attempts}회</b> · 오답/부분정답 포함: <b>{wrong_like}회</b></div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+        if len(st.session_state.completed) == len(SCENARIO_ORDER):
+            if st.button("최종 결과 보기", use_container_width=True):
+                st.session_state.stage = "ending"
+                st.rerun()
 
-    if st.session_state.log_write_error:
-        st.warning(f"참고: 파일 로그 저장 실패 ({st.session_state.log_write_error}) — 앱 동작에는 문제 없습니다.")
-
-    if st.session_state.attempt_history:
-        output = io.StringIO()
-        fieldnames = list(st.session_state.attempt_history[0].keys())
-        writer = csv.DictWriter(output, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(st.session_state.attempt_history)
-        st.download_button(
-            label="📥 이번 교육 응답 로그 다운로드 (CSV)",
-            data=output.getvalue().encode("utf-8-sig"),
-            file_name=f"compliance_training_log_{user_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-            mime="text/csv",
-            use_container_width=True,
-        )
-
-    st.info("관리자용 기관 대시보드 / 문항 통계는 좌측 사이드바의 ‘관리자 대시보드’에서 확인할 수 있습니다.")
-
-    st.markdown("<div class='brief-actions-wrap'></div>", unsafe_allow_html=True)
-    c1, c2 = st.columns([1, 1], gap='large')
-    with c1:
-        if st.button("🗺️ 지도 다시 보기", use_container_width=True):
+    elif st.session_state.stage == "briefing":
+        render_top_spacer()
+        m_key = st.session_state.get("current_mission")
+        if not m_key or m_key not in SCENARIOS:
+            st.warning("테마 정보가 없어 지도로 돌아갑니다.")
             st.session_state.stage = "map"
             st.rerun()
-    with c2:
-        if st.button("🔄 다시 도전", use_container_width=True):
-            u = st.session_state.get("user_info", {}) or {}
-            emp_no = str(u.get("employee_no", "")).strip()
-            emp_name = str(u.get("name", "")).strip()
-            emp_org = str(u.get("org", "")).strip() or "미분류"
-            if not emp_name:
-                st.warning("참가자 정보가 없어 처음 화면으로 이동합니다.")
-                reset_game()
-            else:
-                hist = _summarize_user_attempts(emp_no, emp_name, emp_org)
-                completed_attempts = int(hist.get("completed_attempts", 0) or 0)
-                if completed_attempts >= 3:
-                    st.error("이미 최대 참여 횟수(총 3회)를 모두 사용했습니다.")
-                else:
-                    _set_retry_offer({"employee_no": emp_no, "name": emp_name, "org": emp_org}, completed_attempts, context="ending")
-                    st.rerun()
 
-    render_retry_offer_box("ending")
-else:
-    st.error("알 수 없는 stage입니다. 앱을 다시 시작해주세요.")
+        if m_key in st.session_state.completed:
+            st.info("이미 정복한 테마입니다. 지도로 돌아갑니다.")
+            st.session_state.stage = "map"
+            st.rerun()
+
+        render_briefing(m_key)
+
+    elif st.session_state.stage == "quiz":
+        render_top_spacer()
+        m_key = st.session_state.get("current_mission")
+        if not m_key or m_key not in SCENARIOS:
+            st.warning("퀴즈 정보가 없어 지도로 돌아갑니다.")
+            st.session_state.stage = "map"
+            st.rerun()
+
+        ensure_quiz_progress(m_key)
+        if len(st.session_state.quiz_progress[m_key]["submissions"]) == len(SCENARIOS[m_key]["quiz"]):
+            mark_theme_complete_if_ready(m_key)
+
+        render_quiz(m_key)
+
+    elif st.session_state.stage == "admin":
+        render_top_spacer()
+        render_admin_page()
+
+    elif st.session_state.stage == "ending":
+        render_top_spacer()
+        user_name = st.session_state.user_info.get("name", "가디언")
+        user_org = st.session_state.user_info.get("org", "")
+        score = st.session_state.score
+        grade = get_grade(score, TOTAL_SCORE)
+
+        total_attempts = len(st.session_state.attempt_history)
+        wrong_like = sum(1 for r in st.session_state.attempt_history if str(r.get("is_correct", "")) in ["N", "PARTIAL"])
+
+        st.balloons()
+        if not st.session_state.get("played_final_fanfare", False):
+            play_sfx_now("final")
+            st.session_state.played_final_fanfare = True
+
+        st.title("🏆 Guardian Training Complete")
+        st.success(f"{user_name} 가디언님, 모든 테마를 정복했습니다!")
+
+        _ending_img = get_ending_image()
+        if _ending_img:
+            st.image(str(_ending_img), use_container_width=True)
+
+        st.markdown("<div class='brief-actions-wrap'></div>", unsafe_allow_html=True)
+        c1, c2 = st.columns([1, 1], gap='large')
+        with c1:
+            st.markdown(
+                f"""
+                <div class='card'>
+                  <div class='card-title'>최종 결과</div>
+                  <div>소속 기관: <b>{user_org or "-"}</b></div><div>사번: <b>{st.session_state.user_info.get("employee_no","-") or "-"}</b></div>
+                  <div>총점: <b>{score} / {TOTAL_SCORE}</b></div>
+                  <div style='font-size:0.9rem; opacity:.9;'>객관식 60점 + 주관식 30점 + 참여 10점</div>
+                  <div>등급: <b>{grade}</b></div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        with c2:
+            theme_lines = []
+            for m_key in SCENARIO_ORDER:
+                t = SCENARIOS[m_key]["title"]
+                s = st.session_state.mission_scores.get(m_key, 0)
+                theme_lines.append(f"<li>{t}: <b>{s}/{theme_max_score(m_key)}</b></li>")
+            st.markdown(
+                f"""
+                <div class='card'>
+                  <div class='card-title'>테마별 점수</div>
+                  <ul>{''.join(theme_lines)}</ul>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+        st.markdown(
+            f"""
+            <div class='card'>
+              <div class='card-title'>학습 로그 요약</div>
+              <div>총 제출 횟수: <b>{total_attempts}회</b> · 오답/부분정답 포함: <b>{wrong_like}회</b></div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        if st.session_state.log_write_error:
+            st.warning(f"참고: 파일 로그 저장 실패 ({st.session_state.log_write_error}) — 앱 동작에는 문제 없습니다.")
+
+        if st.session_state.attempt_history:
+            output = io.StringIO()
+            fieldnames = list(st.session_state.attempt_history[0].keys())
+            writer = csv.DictWriter(output, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(st.session_state.attempt_history)
+            st.download_button(
+                label="📥 이번 교육 응답 로그 다운로드 (CSV)",
+                data=output.getvalue().encode("utf-8-sig"),
+                file_name=f"compliance_training_log_{user_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+
+        st.info("관리자용 기관 대시보드 / 문항 통계는 좌측 사이드바의 ‘관리자 대시보드’에서 확인할 수 있습니다.")
+
+        st.markdown("<div class='brief-actions-wrap'></div>", unsafe_allow_html=True)
+        c1, c2 = st.columns([1, 1], gap='large')
+        with c1:
+            if st.button("🗺️ 지도 다시 보기", use_container_width=True):
+                st.session_state.stage = "map"
+                st.rerun()
+        with c2:
+            if st.button("🔄 다시 도전", use_container_width=True):
+                u = st.session_state.get("user_info", {}) or {}
+                emp_no = str(u.get("employee_no", "")).strip()
+                emp_name = str(u.get("name", "")).strip()
+                emp_org = str(u.get("org", "")).strip() or "미분류"
+                if not emp_name:
+                    st.warning("참가자 정보가 없어 처음 화면으로 이동합니다.")
+                    reset_game()
+                else:
+                    hist = _summarize_user_attempts(emp_no, emp_name, emp_org)
+                    completed_attempts = int(hist.get("completed_attempts", 0) or 0)
+                    if completed_attempts >= 3:
+                        st.error("이미 최대 참여 횟수(총 3회)를 모두 사용했습니다.")
+                    else:
+                        _set_retry_offer({"employee_no": emp_no, "name": emp_name, "org": emp_org}, completed_attempts, context="ending")
+                        st.rerun()
+
+        render_retry_offer_box("ending")
+    else:
+        st.error("알 수 없는 stage입니다. 앱을 다시 시작해주세요.")
+
+except Exception as e:
+    # Prevent raw tracebacks (which look like code/HTML exposure) from showing to end users.
+    # We still want the error recorded in logs (Streamlit captures stdout/stderr).
+    import traceback
+    err = traceback.format_exc()
+    try:
+        st.session_state['fatal_error'] = str(e)
+    except Exception:
+        pass
+    st.error('시스템 오류가 발생했습니다. 페이지를 새로고침한 뒤 다시 시도해 주세요. 문제가 계속되면 감사실/관리자에게 문의해 주세요.')
+    st.stop()
