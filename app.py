@@ -447,6 +447,16 @@ div[data-testid="stDialog"] button[kind="header"] svg {
     margin-bottom: 8px;
 }
 
+
+/* Gold highlight for key phrases */
+.gold {
+    color: #D4AF37 !important;
+    font-weight: 800 !important;
+}
+.brief-chip.gold-chip {
+    border-color: rgba(212,175,55,0.55) !important;
+    color: #D4AF37 !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -654,17 +664,15 @@ SCENARIO_ORDER = ["subcontracting", "security", "fairtrade"]
 
 SCENARIOS = {'subcontracting': {'title': '🚜 하도급의 계곡',
                     'briefing': {'title': '하도급 실무 핵심 원칙 브리핑',
-                                 'summary': '하도급 실무에서는 “착공 전 서면 발급”, “대금·범위 변경 시 근거 문서화”, “감액·지연 사유의 객관적 기록”이 핵심입니다. '
-                                            '하도급법상 서면 미발급, 부당감액, 대금지연은 분쟁·제재로 이어질 수 있으므로, 급한 일정일수록 계약·변경·검수 기록을 먼저 남겨야 '
-                                            '합니다.',
+                                 'summary': '하도급 업무의 3대 원칙은 <span class="gold">① 착공 전 서면(발주서·계약서) 발급</span>, <span class="gold">② 변경 발생 즉시 변경합의서/메일로 근거 문서화</span>, <span class="gold">③ 감액·지급지연은 사유·산정근거·협의내용을 서면으로 확정</span>입니다. 일정이 급할수록 “먼저 작업”이 가장 큰 리스크가 되며, 분쟁·제재 대응에서 <span class="gold">기록(서면)</span>이 곧 방어수단입니다.',
                                  'keywords': ['하도급법', '서면발급 의무', '변경계약 문서화', '부당감액 금지'],
                                  'red_flags': ['“먼저 작업부터, 계약서는 나중에”처럼 착공 전 서면을 미루는 지시',
                                                '구두로 범위/단가를 바꾸고 메일·변경합의서 없이 진행',
                                                '품질/납기 이슈 근거 없이 일괄 감액 또는 지급 보류'],
-                                 'checklist': ['착공 전 발주서/계약서(범위·단가·납기) 발급 여부 확인',
-                                               '변경 발생 시 변경사유·변경금액·승인권자 기록 남기기',
-                                               '검수/납품/하자 근거자료를 지급 판단 문서와 연결하기',
-                                               '감액 검토 시 정당한 사유·산정근거·협의내용을 서면으로 남기기']},
+                                 'checklist': ['<span class="gold">착공 전</span> 발주서/계약서(범위·단가·납기) 발급 여부 확인',
+                                               '범위·단가 변경 시 <span class="gold">변경사유·금액·승인권자</span>를 문서로 남기기(메일/합의서)',
+                                               '검수/납품/하자 근거자료를 <span class="gold">지급 판단 문서</span>와 연결(증빙 첨부)',
+                                               '감액 검토 시 <span class="gold">정당 사유·산정근거·협의 기록</span>을 선확보 후 처리']},
                     'quiz': [{'type': 'mcq',
                               'code': 'SC-1',
                               'score': 35,
@@ -708,16 +716,15 @@ SCENARIOS = {'subcontracting': {'title': '🚜 하도급의 계곡',
                                                '처리/기록 조치': {'keywords': ['협의', '서면', '기록', '문서', '정산 기준', '확인 후'], 'weight': 3, 'min_hits': 2}}}]},
  'security': {'title': '🔐 정보보안의 요새',
               'briefing': {'title': '정보보안 기본 원칙 브리핑',
-                           'summary': '정보보안은 “의심 메일/링크 식별”, “비밀번호·인증정보 보호”, “사고 징후 발견 즉시 보고”가 핵심입니다. 실제 사고는 클릭 한 번으로 '
-                                      '시작되는 경우가 많고, 초기 보고가 늦어질수록 개인정보 유출·업무 중단 피해가 커집니다.',
+                           'summary': '정보보안의 기본 원칙은 <span class="gold">최소권한(Need-to-know)</span>, <span class="gold">데이터 분류·암호화</span>, <span class="gold">접근기록(로그)과 이상징후 모니터링</span>입니다. 업무 편의로 권한을 넓히거나 자료를 개인 저장소로 옮기는 순간, 사고 발생 시 책임이 개인에게 집중될 수 있으니 <span class="gold">반출·공유·권한</span>은 반드시 절차대로 처리하세요.',
                            'keywords': ['피싱 메일', '계정정보 보호', '사고 즉시보고', '개인정보'],
                            'red_flags': ['긴급결재·택배조회 등을 빙자한 링크 클릭 유도 메일',
                                          '비밀번호·OTP·인증코드를 메신저/메일로 요청하는 행위',
                                          '이상 로그인/파일 암호화 징후를 발견했는데 개인적으로만 처리'],
-                           'checklist': ['발신자 도메인·링크 주소·첨부파일 확장자(exe, zip 등) 확인',
-                                         '비밀번호/인증코드는 절대 공유하지 않고 공식 시스템에서만 입력',
-                                         '의심 클릭/오발송/계정이상 발견 시 즉시 보안담당·헬프데스크 보고',
-                                         '초동보고에는 사고상황·즉시조치·추가점검 요청을 함께 적기']},
+                           'checklist': ['권한 부여/변경 시 <span class="gold">최소권한</span> 원칙 점검(불필요 권한 즉시 회수)',
+                                               '대외 공유 전 <span class="gold">대상 데이터 등급</span> 확인 및 마스킹/암호화 적용',
+                                               '개인 메일·메신저·개인 클라우드로 업무자료 이동 금지(필요 시 <span class="gold">승인된 채널</span> 사용)',
+                                               'USB/외장매체 사용 시 <span class="gold">반출 승인·기록</span> 및 사용 후 즉시 삭제/반납']},
               'quiz': [{'type': 'mcq',
                         'code': 'IS-1',
                         'score': 35,
@@ -761,16 +768,15 @@ SCENARIOS = {'subcontracting': {'title': '🚜 하도급의 계곡',
                                             '보고/점검 요청': {'keywords': ['보고', '보안담당', '헬프데스크', '접속기록', '점검', '요청'], 'weight': 4, 'min_hits': 2}}}]},
  'fairtrade': {'title': '🛡️ 공정거래의 성',
                'briefing': {'title': '공정거래·청렴 기본 원칙 브리핑',
-                            'summary': '공정거래·청렴 실무에서는 “이해관계자와의 거리 유지”, “부당한 편의·청탁 거절”, “접촉·제안 발생 시 기록 및 보고”가 핵심입니다. '
-                                       '청탁금지법, 공정거래 관련 내부규정, 윤리강령 위반은 개인 문제를 넘어 회사의 평판·입찰 리스크로 이어질 수 있습니다.',
+                            'summary': '공정거래에서 가장 위험한 순간은 <span class="gold">경쟁사와의 정보교환</span>과 <span class="gold">거래조건(가격·수수료·마진·물량) 협의</span>입니다. 회의·세미나·협회 활동에서도 가격/물량/전략이 오가면 즉시 중단·이탈하고, <span class="gold">사전 가이드(법무/컴플라이언스)</span>에 따라 기록을 남겨야 합니다. 거래상 지위 남용(불공정조건 강요)도 분쟁·제재의 단골 이슈입니다.',
                             'keywords': ['청탁금지법', '이해충돌 예방', '금품·편의 거절', '윤리보고'],
                             'red_flags': ['협력사/거래처가 식사·상품권·편의를 반복적으로 제공',
                                           '평가/입찰 담당자에게 결과를 미리 알려달라는 요청',
                                           '지인·퇴직자 네트워크를 통한 우회 청탁 제안'],
-                            'checklist': ['거래처 접촉 시 목적·참석자·제공내역을 내부기준에 따라 기록',
-                                          '금품/향응/편의 제공 제안은 즉시 거절하고 상급자·윤리채널 공유',
-                                          '입찰·평가 정보는 권한자 외 비공개, 문의 시 공식 절차로 안내',
-                                          '모든 업체에 동일 기준으로 답변되도록 공식 질의 채널로만 접수받기']},
+                            'checklist': ['경쟁사 접촉/회의 전 <span class="gold">아젠다 사전 확인</span> 및 민감 주제(가격·물량·입찰) 금지 안내',
+                                               '민감 정보가 나오면 <span class="gold">즉시 중단</span>하고 회의 이탈/반대 의사 표명 기록',
+                                               '거래조건 변경 시 <span class="gold">근거(원가·서비스 범위)</span>를 문서화하고 표준계약/가이드 준수',
+                                               '리베이트/접대/편의 제공 요청 발생 시 <span class="gold">즉시 신고</span> 및 증빙 보존']},
                'quiz': [{'type': 'mcq',
                          'code': 'FT-1',
                          'score': 35,
@@ -2441,7 +2447,17 @@ def render_intro_org_cumulative_board():
         .retry-offer-body{ color:#F3F7FF; font-size:.94rem; margin-bottom:4px; }
         .retry-offer-desc{ color:#DCE8FF; font-size:.90rem; line-height:1.45; margin-bottom:6px; }
         .retry-offer-note{ color:#BFD1F6; font-size:.82rem; }
-            </style>
+            
+/* Gold highlight for key phrases */
+.gold {
+    color: #D4AF37 !important;
+    font-weight: 800 !important;
+}
+.brief-chip.gold-chip {
+    border-color: rgba(212,175,55,0.55) !important;
+    color: #D4AF37 !important;
+}
+</style>
             """,
             unsafe_allow_html=True,
         )
