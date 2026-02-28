@@ -295,7 +295,7 @@ div.stButton > button:first-child:hover {
     }
 }
 
-/* 직원 확인 모달용 읽기 전용 정보 박스 (검은 disabled input 대체) */
+/* 직원 확인 모달용 읽기 전용 정보 박스 */
 .modal-readonly-field {
     margin-top: 2px;
 }
@@ -318,8 +318,6 @@ div.stButton > button:first-child:hover {
     line-height: 1.25;
     box-shadow: inset 0 1px 0 rgba(255,255,255,0.7);
 }
-
-
 
 /* 기관별 누적 점수 미니 카드 (인트로) */
 .org-mini-grid {
@@ -371,23 +369,6 @@ div[data-testid="stDialog"] small {
 div[data-testid="stDialog"] [data-testid="stMarkdownContainer"] * {
     color: #172233 !important;
 }
-div[data-testid="stDialog"] [data-testid="stCaptionContainer"] * {
-    color: #4A5A74 !important;
-}
-div[data-testid="stDialog"] [data-testid="stDataFrame"] * {
-    color: #172233 !important;
-}
-div[data-testid="stDialog"] [data-testid="stSelectbox"] > label,
-div[data-testid="stDialog"] [data-testid="stTextInput"] > label {
-    color: #42526B !important;
-    font-weight: 700 !important;
-}
-div[data-testid="stDialog"] [data-testid="stDialogHeader"] * {
-    color: #172233 !important;
-}
-div[data-testid="stDialog"] button[kind="header"] svg {
-    color: #172233 !important;
-}
 
 /* 인트로 참가자 확인(메인화면) 읽기 전용 정보 카드 */
 .confirm-readonly-field {
@@ -426,8 +407,6 @@ div[data-testid="stDialog"] button[kind="header"] svg {
 
 </style>
 """, unsafe_allow_html=True)
-
-
 
 # =========================================================
 # 공통 안전 UI 래퍼 (버전 차이/빈 데이터 방어)
