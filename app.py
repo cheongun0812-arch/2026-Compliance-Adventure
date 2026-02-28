@@ -1616,6 +1616,7 @@ def _render_employee_lookup_popup_body(name_query: str = ""):
                 "organization": str(row.get("organization", "")).strip() or "미분류",
             }
             st.session_state.employee_lookup_modal_open = False
+            st.session_state.just_confirmed_employee = True
             try:
                 st.toast("참가자 정보가 확인되었습니다.", icon="✅")
             except Exception:
@@ -2237,7 +2238,7 @@ def _build_participant_snapshot(df: pd.DataFrame):
 
 def render_intro_org_cumulative_board():
     """메인 화면 전용: 기관별 누적 점수/참여 현황 대시보드 (참여자용 요약 뷰)."""
-    st.markdown("### 🏢 Cumulative score and participation status by institution")
+    st.markdown("### 🏢 기관별 누적 점수 및 참여 현황")
 
     df, err = _load_log_df()
     if err:
