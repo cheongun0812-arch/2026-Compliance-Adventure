@@ -13,6 +13,29 @@ try:
 except Exception:
     StreamlitInvalidHeightError = Exception
 import streamlit.components.v1 as components
+
+
+def scroll_to_top(delay_ms: int = 0) -> None:
+    """Best-effort scroll-to-top.
+
+    Streamlit may preserve scroll position across reruns/navigation. This helper forces
+    the browser viewport back to the top so critical titles/buttons are visible.
+    """
+    js = f"""
+    <script>
+    (function() {{
+      const go = () => {{
+        try {{ window.scrollTo(0,0); }} catch(e) {{}}
+        try {{ window.parent && window.parent.scrollTo(0,0); }} catch(e) {{}}
+        try {{ window.top && window.top.scrollTo(0,0); }} catch(e) {{}}
+      }};
+      const d = {delay_ms};
+      if (d && d > 0) {{ setTimeout(go, d); }} else {{ go(); }}
+    }})();
+    </script>
+    """
+    components.html(js, height=0)
+
 import os
 import re
 import difflib
@@ -3341,6 +3364,14 @@ def render_quiz(m_key: str):
 # =========================================================
 init_state()
 
+# --- 스크롤 위치 초기화: 화면(stage) 전환 시 상단으로 이동 ---
+_prev = st.session_state.get('_prev_stage')
+_cur = st.session_state.get('stage', 'intro')
+if _prev != _cur:
+    st.session_state['_prev_stage'] = _cur
+    st.session_state['_scroll_to_top'] = True
+    st.session_state['_scroll_target_stage'] = _cur
+
 # --- 안정적 화면 전환: 위젯 생성 전에 '모험 시작' 요청을 처리 ---
 # Streamlit은 위젯(key=...)이 이미 생성된 실행(run)에서 같은 key를 코드로 덮어쓰면
 # StreamlitAPIException을 발생시킬 수 있습니다. (직원 화면에 에러/코드 노출 → 신뢰 저하)
@@ -3492,6 +3523,10 @@ try:
         render_retry_offer_box("intro")
 
     elif st.session_state.stage == "map":
+        # Ensure the title is visible immediately after navigation.
+        if st.session_state.get("_scroll_to_top") and st.session_state.get("_scroll_target_stage") == "map":
+            scroll_to_top(delay_ms=0)
+            st.session_state["_scroll_to_top"] = False
         render_top_spacer()
         user_name = st.session_state.user_info.get("name", "가디언")
         user_org = st.session_state.user_info.get("org", "")
