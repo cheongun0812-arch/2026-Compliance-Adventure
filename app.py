@@ -344,37 +344,6 @@ div.stButton > button:first-child:hover {
 
 
 
-/* 기관별 누적 점수 미니 카드 (인트로) */
-.org-mini-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-    gap: 10px;
-    margin: 8px 0 4px 0;
-}
-.org-mini-card {
-    background: linear-gradient(135deg, #121A26, #0F1622);
-    border: 1px solid #263348;
-    border-radius: 12px;
-    padding: 10px 12px;
-}
-.org-mini-title {
-    color: #CFE0FF;
-    font-size: 0.86rem;
-    font-weight: 700;
-    margin-bottom: 4px;
-    line-height: 1.25;
-}
-.org-mini-score {
-    color: #F7FBFF;
-    font-size: 1.15rem;
-    font-weight: 800;
-}
-.org-mini-meta {
-    color: #AFC2E4;
-    font-size: 0.78rem;
-    margin-top: 2px;
-}
-
 /* 다이얼로그(직원 정보 확인) 가독성 보정 */
 div[data-testid="stDialog"] [role="dialog"] {
     background: #FFFFFF !important;
@@ -633,14 +602,7 @@ ENDING_IMAGE_CANDIDATE_NAMES = [
 # --- 관리자 통계/채점 기준 ---
 TEXT_CORRECT_THRESHOLD = 0.7  # 주관식 점수율 70% 이상이면 '정답'으로 집계
 
-# --- 사운드 / 아이콘 자원 ---
-SFX = {
-    "correct": BASE_DIR / "sfx_correct.mp3",
-    "wrong": BASE_DIR / "sfx_wrong.mp3",
-    "conquer": BASE_DIR / "sfx_conquer.mp3",
-    "final": BASE_DIR / "sfx_final.mp3",
-}
-
+# --- 아이콘 자원 ---
 THEME_ICONS = {
     "subcontracting": "🚜",
     "security": "🔐",
@@ -663,22 +625,7 @@ EMPLOYEE_COL_ALIASES = {
     "organization": ["organization", "org", "department", "dept", "소속", "소속기관", "기관", "조직", "본부", "부서"],
 }
 
-# 전체 과정 공통 BGM (권장 파일명)
-GLOBAL_BGM_CANDIDATE_NAMES = [
-    "2026 Compliance Adventure_bgm.mp3",  # 사용자 지정 최종 파일명
-    "2026_Compliance_Adventure_bgm.mp3",
-    "bgm_main.mp3",
-]
 
-# 구버전 단계별 파일명도 fallback 지원 (기존 운영 호환)
-BGM = {
-    "intro": BASE_DIR / "bgm_intro.mp3",
-    "map": BASE_DIR / "bgm_map.mp3",
-    "subcontracting": BASE_DIR / "bgm_subcontracting.mp3",
-    "security": BASE_DIR / "bgm_security.mp3",
-    "fairtrade": BASE_DIR / "bgm_fairtrade.mp3",
-    "ending": BASE_DIR / "bgm_final.mp3",
-}
 
 ADMIN_PASSWORD = os.environ.get("COMPLIANCE_ADMIN_PASSWORD", "admin2026")
 
@@ -880,11 +827,7 @@ def init_state():
         "map_celebrate_theme": None,
         "last_cleared_mission": None,
         "log_write_error": None,
-        "played_final_fanfare": False,
-        "admin_authed": False,
-        "pending_sfx": None,
-        "bgm_enabled": True,
-        "audio_debug": False,
+"admin_authed": False,
         "employee_lookup_candidates": [],
         "employee_selected_record": None,
         "employee_lookup_modal_open": False,
@@ -985,13 +928,8 @@ def mark_theme_complete_if_ready(m_key: str):
             st.session_state.map_fx_done = False
             st.session_state.map_celebrate_theme = m_key
             st.session_state.map_celebrate_until = float(time.time()) + 5.0
-            # 테마 정복 사운드 큐 (최종 정복은 fanfare 우선)
-            if len(st.session_state.completed) >= len(SCENARIO_ORDER):
-                queue_sfx("final")
-            else:
-                queue_sfx("conquer")
 # =========================================================
-# 5) 유틸 함수 (이미지 / 사운드 / 로그 / 평가)
+# 5) 유틸 함수 (이미지 / 로그 / 평가)
 # =========================================================
 def get_current_map_image():
     stage_idx = min(len(st.session_state.get("completed", [])), 3)
@@ -1000,32 +938,6 @@ def get_current_map_image():
         return path
     if DEFAULT_MAP_IMAGE.exists():
         return DEFAULT_MAP_IMAGE
-    return None
-
-
-def resolve_intro_cover_image() -> Path | None:
-    """Resolve the intro/main cover image path.
-
-    Prefer a dedicated intro/banner image if present; fallback to map images.
-    Uses Streamlit native `st.image` on the intro screen to avoid HTML rendering issues.
-    """
-    candidate_names = [
-        "intro.png", "intro.jpg", "intro.jpeg",
-        "main.png", "main.jpg", "main.jpeg",
-        "cover.png", "cover.jpg", "cover.jpeg",
-        "banner.png", "banner.jpg", "banner.jpeg",
-        "title.png", "title.jpg", "title.jpeg",
-        # app default assets
-        "world_map_0.png", "world_map.png",
-    ]
-    for nm in candidate_names:
-        p = ASSET_DIR / nm
-        if p.exists():
-            return p
-
-    p = get_current_map_image()
-    if p and p.exists():
-        return p
     return None
 
 
@@ -1076,113 +988,7 @@ def show_map_with_fade(map_path: Path, caption: str = None, celebrate: bool = Fa
             st.caption(caption)
 
 
-from typing import Optional
 
-def resolve_bgm_path(bgm_key: str) -> Optional[Path]:
-    # 1) 전체 공통 BGM 우선 사용
-    for name in GLOBAL_BGM_CANDIDATE_NAMES:
-        gp = BASE_DIR / name
-        if gp.exists():
-            return gp
-    # 2) 없으면 단계별 BGM fallback
-    p = BGM.get(bgm_key)
-    if p and p.exists():
-        return p
-    return None
-
-
-def _audio_component_html(audio_b64: str, *, loop: bool = False, hidden_label: str = "audio"):
-    loop_attr = " loop" if loop else ""
-    html = f"""
-    <html>
-      <body style="margin:0; padding:0; background:transparent;">
-        <audio id="{hidden_label}" autoplay{loop_attr} playsinline webkit-playsinline preload="auto" style="display:none;">
-          <source src="data:audio/mp3;base64,{audio_b64}" type="audio/mpeg">
-        </audio>
-        <script>
-          (function() {{
-            const a = document.getElementById("{hidden_label}");
-            if (!a) return;
-            a.volume = 0.65;
-            const tryPlay = () => {{
-              const p = a.play();
-              if (p && p.catch) p.catch(() => {{}});
-            }};
-            // 최초 진입 시 자동재생 시도
-            tryPlay();
-            setTimeout(tryPlay, 120);
-            setTimeout(tryPlay, 400);
-            // 브라우저 자동재생 제한 시 첫 사용자 상호작용에서 재시도
-            ["click", "keydown", "touchstart"].forEach((evt) => {{
-              document.addEventListener(evt, tryPlay, {{ once: false, passive: true }});
-            }});
-          }})();
-        </script>
-      </body>
-    </html>
-    """
-    components.html(html, height=0, width=0)
-
-
-def queue_sfx(sfx_key: str):
-    st.session_state.pending_sfx = sfx_key
-
-
-def play_sfx_now(sfx_key: str):
-    sfx_path = SFX.get(sfx_key)
-    if not sfx_path or not sfx_path.exists():
-        return
-    try:
-        sfx_b64 = base64.b64encode(sfx_path.read_bytes()).decode("utf-8")
-        _audio_component_html(sfx_b64, loop=False, hidden_label=f"sfx_now_{sfx_key}_{int(time.time()*1000)}")
-    except Exception:
-        pass
-
-
-def _resolve_bgm_key():
-    stage = st.session_state.get("stage", "intro")
-    current = st.session_state.get("current_mission")
-
-    if stage == "intro":
-        return "intro"
-    if stage == "map":
-        return "map"
-    if stage in ("briefing", "quiz") and current in SCENARIOS:
-        return current
-    if stage == "ending":
-        return "ending"
-    return "map"
-
-
-def render_audio_system():
-    # 1) Background music (loop)
-    if st.session_state.get("bgm_enabled", True):
-        bgm_key = _resolve_bgm_key()
-        bgm_path = resolve_bgm_path(bgm_key)
-        if bgm_path and bgm_path.exists():
-            try:
-                bgm_b64 = base64.b64encode(bgm_path.read_bytes()).decode("utf-8")
-                # 전체 공통 BGM 사용 시 stage 전환에도 끊김을 최소화하도록 고정 라벨 사용
-                _audio_component_html(bgm_b64, loop=True, hidden_label="bgm_global")
-            except Exception:
-                pass
-
-    # 2) One-shot SFX (queued to survive st.rerun)
-    pending_key = st.session_state.get("pending_sfx")
-    if pending_key:
-        sfx_path = SFX.get(pending_key)
-        if sfx_path and sfx_path.exists():
-            try:
-                sfx_b64 = base64.b64encode(sfx_path.read_bytes()).decode("utf-8")
-                _audio_component_html(sfx_b64, loop=False, hidden_label=f"sfx_{pending_key}_{int(time.time()*1000)}")
-            except Exception:
-                pass
-        st.session_state.pending_sfx = None
-
-
-def render_audio_status_hint():
-    # 패널 제거 (최종본에서 사용하지 않음)
-    return
 
 def _normalize_log_row(raw: dict) -> dict:
     raw = raw or {}
@@ -2085,16 +1891,13 @@ def start_training_attempt_session(user_info: dict, attempt_round: int, *, skip_
     st.session_state.map_celebrate_until = 0.0
     st.session_state.map_celebrate_theme = None
     st.session_state.log_write_error = None
-    st.session_state.played_final_fanfare = False
     st.session_state.retry_offer = None
     st.session_state.training_attempt_round = int(max(1, attempt_round))
     st.session_state.training_attempt_id = f"run-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8]}"
 
     for k, v in keep_keys.items():
         # Avoid overwriting Streamlit widget-bound keys during runtime
-        if k in ("bgm_enabled", "audio_debug"):
-            continue
-        st.session_state[k] = v
+                st.session_state[k] = v
 
     award_participation_points_if_needed()
 
@@ -2317,285 +2120,12 @@ def _build_participant_snapshot(df: pd.DataFrame):
     }
 
 
-def render_intro_org_cumulative_board():
-    """메인 화면 전용: 기관별 누적 점수/참여 현황 대시보드 (참여자용 요약 뷰)."""
-    st.markdown("### 🏢 기관별 누적 점수 및 참여 현황")
-
-    df, err = _load_log_df()
-    if err:
-        st.info(err)
-        return
-
-    try:
-        snap = _build_participant_snapshot(df)
-        participants = snap.get("participants", pd.DataFrame())
-        if participants is None or participants.empty:
-            st.info("표시할 누적 점수 데이터가 없습니다.")
-            return
-
-        # 참여자 최신 점수 기준 집계
-        org_score = (
-            participants.groupby("organization", as_index=False)
-            .agg(
-                cumulative_score=("total_score", "sum"),
-                participant_count=("learner_id", "nunique"),
-                avg_score=("total_score", "mean"),
-            )
-        )
-        org_score["organization"] = org_score["organization"].fillna("미분류").astype(str)
-
-        # 직원명단 기반 전체 인원(분모) 집계 -> 참여율 계산
-        emp_df, _ = load_employee_master_df()
-        if emp_df is not None and not emp_df.empty:
-            emp_base = emp_df.copy()
-            emp_base["organization"] = emp_base["organization"].fillna("미분류").astype(str)
-            # 사번이 비어있는 경우를 대비해 이름 기준으로 대체 식별
-            emp_base["_emp_key"] = emp_base["employee_no"].astype(str).str.strip()
-            emp_base.loc[emp_base["_emp_key"] == "", "_emp_key"] = emp_base["name"].astype(str).str.strip()
-            org_base = (
-                emp_base.groupby("organization", as_index=False)
-                .agg(total_employees=("_emp_key", "nunique"))
-            )
-        else:
-            org_base = pd.DataFrame(columns=["organization", "total_employees"])
-
-        merged = org_base.merge(org_score, on="organization", how="outer")
-        for col in ["total_employees", "cumulative_score", "participant_count", "avg_score"]:
-            if col not in merged.columns:
-                merged[col] = 0
-        merged["total_employees"] = pd.to_numeric(merged["total_employees"], errors="coerce").fillna(0).astype(int)
-        merged["cumulative_score"] = pd.to_numeric(merged["cumulative_score"], errors="coerce").fillna(0.0)
-        merged["participant_count"] = pd.to_numeric(merged["participant_count"], errors="coerce").fillna(0).astype(int)
-        merged["avg_score"] = pd.to_numeric(merged["avg_score"], errors="coerce").fillna(0.0)
-
-        merged["participation_rate"] = np.where(
-            merged["total_employees"] > 0,
-            (merged["participant_count"] / merged["total_employees"] * 100.0),
-            np.nan,
-        )
-
-        merged = merged.sort_values(
-            ["cumulative_score", "avg_score", "participant_count", "organization"],
-            ascending=[False, False, False, True],
-        ).reset_index(drop=True)
-        merged["rank"] = np.arange(1, len(merged) + 1)
-
-        if merged.empty:
-            st.info("기관별 누적 점수 데이터가 없습니다.")
-            return
-
-        # 시각 강조용 HTML 테이블
-        st.markdown(
-            """
-            <style>
-            .intro-org-board-wrap{
-              background: linear-gradient(180deg, rgba(12,20,38,.95), rgba(10,15,28,.96));
-              border:1px solid rgba(71,106,178,.35);
-              border-radius:16px;
-              padding:14px 14px 10px 14px;
-              box-shadow: 0 8px 24px rgba(0,0,0,.28);
-              margin-bottom: 8px;
-            }
-            .intro-org-board-sub{
-              color:#BFD2FF; font-size:.86rem; margin-top:-2px; margin-bottom:10px; opacity:.95;
-            }
-            .intro-org-table{
-              width:100%;
-              border-collapse: separate;
-              border-spacing:0 6px;
-              table-layout: fixed;
-            }
-            .intro-org-table thead th{
-              text-align:left;
-              font-size:.86rem;
-              color:#DDE8FF;
-              background: rgba(62,90,152,.30);
-              border-top:1px solid rgba(120,150,220,.22);
-              border-bottom:1px solid rgba(120,150,220,.16);
-              padding:9px 10px;
-            }
-            .intro-org-table thead th:first-child{border-radius:10px 0 0 10px;}
-            .intro-org-table thead th:last-child{border-radius:0 10px 10px 0;}
-            .intro-org-table tbody td{
-              padding:10px 10px;
-              background: rgba(19,28,50,.92);
-              border-top:1px solid rgba(114,145,214,.16);
-              border-bottom:1px solid rgba(114,145,214,.10);
-              color:#F4F8FF;
-              font-size:.92rem;
-              vertical-align: middle;
-            }
-            .intro-org-table tbody tr td:first-child{
-              border-radius:12px 0 0 12px;
-              width:68px;
-              font-weight:700;
-            }
-            .intro-org-table tbody tr td:last-child{border-radius:0 12px 12px 0;}
-            .org-rank-badge{
-              display:inline-flex; align-items:center; justify-content:center;
-              min-width:34px; height:28px; border-radius:999px;
-              font-weight:800; font-size:.86rem;
-              border:1px solid rgba(255,255,255,.18);
-              background: rgba(255,255,255,.06);
-              color:#EAF1FF;
-            }
-            .org-rank-top1{ background: linear-gradient(135deg,#7A5A00,#D9B342); color:#FFF8DA; border-color:#E8CF75; }
-            .org-rank-top2{ background: linear-gradient(135deg,#4B5563,#AEB7C2); color:#F5F7FA; border-color:#C9D0D8; }
-            .org-rank-top3{ background: linear-gradient(135deg,#5D3D1E,#C9853A); color:#FFF1DF; border-color:#E3AE72; }
-            .org-name-cell{font-weight:700; color:#FFFFFF; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
-            .org-num-strong{font-weight:800; color:#79F2B0;}
-            .org-subtle{color:#C5D5FB; font-size:.82rem;}
-            .org-rate-wrap{
-              display:flex; align-items:center; gap:8px;
-            }
-            .org-rate-bar{
-              flex:1; min-width:110px; height:10px; border-radius:999px;
-              background: rgba(255,255,255,.08);
-              overflow:hidden; border:1px solid rgba(255,255,255,.06);
-            }
-            .org-rate-fill{
-              height:100%;
-              background: linear-gradient(90deg, #2BD676, #83F1FF);
-              box-shadow: 0 0 12px rgba(43,214,118,.35);
-            }
-            .org-rate-text{min-width:48px; text-align:right; font-weight:700; color:#EFFFF7; font-size:.86rem;}
-        .map-pollen-overlay{
-            position:absolute; inset:0; pointer-events:none; overflow:hidden;
-            border-radius:14px;
-        }
-        .map-pollen-overlay .pollen-dot{
-            position:absolute;
-            border-radius:50%;
-            background: radial-gradient(circle, rgba(255,244,169,.95) 0%, rgba(255,220,101,.55) 48%, rgba(255,220,101,0) 72%);
-            box-shadow:0 0 14px rgba(255,221,102,.35);
-            animation: pollenFloat 5s ease-in-out forwards;
-            opacity:0;
-        }
-        .map-fade-wrap.celebrate{
-            box-shadow: 0 0 0 1px rgba(255,227,130,.22), 0 10px 28px rgba(255,221,102,.12);
-        }
-        @keyframes pollenFloat{
-            0%{ transform:translateY(12px) scale(.85); opacity:0; }
-            10%{ opacity:.95; }
-            65%{ opacity:.88; }
-            100%{ transform:translateY(-42px) scale(1.18); opacity:0; }
-        }
-        .stage-clear-banner{ animation: stageClearPulse .9s ease-in-out 2; }
-        @keyframes stageClearPulse{
-            0%{ transform:scale(0.995); box-shadow:0 0 0 rgba(0,0,0,0); }
-            50%{ transform:scale(1.01); box-shadow:0 8px 18px rgba(59,130,246,.16); }
-            100%{ transform:scale(1); box-shadow:0 0 0 rgba(0,0,0,0); }
-        }
-        .retry-offer-card{
-            margin: 10px 0 10px 0;
-            padding: 14px 16px;
-            border-radius: 14px;
-            border:1px solid rgba(255,214,102,.35);
-            background: linear-gradient(180deg, rgba(38,31,10,.78), rgba(19,22,33,.88));
-            box-shadow: 0 8px 24px rgba(0,0,0,.22);
-            text-align: center;
-        }
-        .retry-offer-title{ color:#FFE7A0; font-weight:800; font-size:1.03rem; margin-bottom:6px; }
-        .retry-offer-body{ color:#F3F7FF; font-size:.94rem; margin-bottom:4px; }
-        .retry-offer-desc{ color:#DCE8FF; font-size:.90rem; line-height:1.45; margin-bottom:6px; }
-        .retry-offer-note{ color:#BFD1F6; font-size:.82rem; }
-            
-/* Gold highlight for key phrases */
-.gold {
-    color: #D4AF37 !important;
-    font-weight: 800 !important;
-}
-.brief-chip.gold-chip {
-    border-color: rgba(212,175,55,0.55) !important;
-    color: #D4AF37 !important;
-}
-</style>
-            """,
-            unsafe_allow_html=True,
-        )
-
-        rows_html = []
-        for _, row in merged.iterrows():
-            rank = int(row.get("rank", 0) or 0)
-            org_name = html.escape(str(row.get("organization", "미분류")))
-            cum = int(round(float(row.get("cumulative_score", 0) or 0)))
-            avg = float(row.get("avg_score", 0) or 0.0)
-            p_cnt = int(row.get("participant_count", 0) or 0)
-            total_emp = int(row.get("total_employees", 0) or 0)
-            rate = row.get("participation_rate", np.nan)
-            has_rate = pd.notna(rate)
-            rate_val = float(rate) if has_rate else 0.0
-            rate_pct = max(0.0, min(100.0, rate_val))
-            rank_cls = "org-rank-badge"
-            if rank == 1:
-                rank_cls += " org-rank-top1"
-            elif rank == 2:
-                rank_cls += " org-rank-top2"
-            elif rank == 3:
-                rank_cls += " org-rank-top3"
-            if rank <= 3:
-                rank_label = {1: "🥇1", 2: "🥈2", 3: "🥉3"}[rank]
-            else:
-                rank_label = str(rank)
-
-            participant_label = f"{p_cnt}명"
-            if total_emp > 0:
-                participant_label = f"{p_cnt} / {total_emp}명"
-
-            rate_display = f"{rate_val:.1f}%" if has_rate else "-"
-
-            rows_html.append(
-                f"""
-                <tr>
-                  <td><span class="{rank_cls}">{rank_label}</span></td>
-                  <td class="org-name-cell" title="{org_name}">{org_name}</td>
-                  <td><span class="org-num-strong">{cum:,}점</span></td>
-                  <td>{avg:.1f}점</td>
-                  <td>{participant_label}<div class="org-subtle">참여자수</div></td>
-                  <td>
-                    <div class="org-rate-wrap">
-                      <div class="org-rate-bar"><div class="org-rate-fill" style="width:{rate_pct:.1f}%;"></div></div>
-                      <div class="org-rate-text">{rate_display}</div>
-                    </div>
-                  </td>
-                </tr>
-                """
-            )
-
-        st.markdown(
-            f"""
-            <div class="intro-org-board-wrap">
-              <div class="intro-org-board-sub">메인 화면에서는 기관별 누적 현황 요약만 표시됩니다. 상세 로그/통계는 관리자 대시보드에서 확인하세요.</div>
-              <table class="intro-org-table">
-                <thead>
-                  <tr>
-                    <th style="width:68px;">순위</th>
-                    <th>기관명</th>
-                    <th style="width:140px;">누적 점수</th>
-                    <th style="width:140px;">참가자 평균점수</th>
-                    <th style="width:150px;">참여자 수</th>
-                    <th style="width:220px;">참여율</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {''.join(rows_html)}
-                </tbody>
-              </table>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-    except Exception as e:
-        st.info(f"기관별 누적 현황 표시 중 오류가 발생했습니다: {e}")
-
-
 def render_admin_password_gate():
     st.markdown(
         """
         <div class='admin-lock'>
           <div style='font-weight:800; margin-bottom:4px;'>🔐 관리자 화면</div>
-          <div style='font-size:0.9rem; color:#EADFC4;'>기관별 누적 대시보드 / 문항별 통계 / 전체 참가자 현황은 관리자 인증 후 확인할 수 있습니다.</div>
+          <div style='font-size:0.9rem; color:#EADFC4;'>문항별 통계 / 전체 참가자 현황 / 로그 관리는 관리자 인증 후 확인할 수 있습니다.</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -2623,128 +2153,6 @@ def render_admin_password_gate():
     st.caption("※ 보안을 위해 실제 운영 시 환경변수 COMPLIANCE_ADMIN_PASSWORD 설정을 권장합니다.")
 
 
-def _render_org_ranking_cards(org_summary: pd.DataFrame, top_n: int = 5):
-    if org_summary.empty:
-        st.info("기관 요약 데이터가 없습니다.")
-        return
-    top_df = org_summary.head(top_n).copy()
-    st.markdown("#### 🏅 기관별 평균 점수 랭킹")
-    for i, row in top_df.reset_index(drop=True).iterrows():
-        pct = float(row.get("avg_score_rate", 0) or 0)
-        st.markdown(
-            f"""
-            <div class='rank-card'>
-              <div class='rank-title'>{i+1}. {row['organization']}</div>
-              <div class='rank-bar'><div class='rank-fill' style='width:{max(0, min(100, pct))}%;'></div></div>
-              <div class='rank-meta'>
-                평균 점수율 {pct:.1f}% · 참여자 {int(row.get('participants', 0))}명 · 수료율 {float(row.get('completion_rate', 0) or 0):.1f}%
-              </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-
-def render_org_dashboard(compact: bool = False):
-    st.markdown("### 🏢 기관별 참여/점수 대시보드")
-
-    df, err = _load_log_df()
-    if err:
-        st.info(err)
-        return
-
-    snap = _build_participant_snapshot(df)
-    participants = snap["participants"]
-    participants_view = snap["participants_view"]
-    org_summary = snap["org_summary"]
-
-    if participants.empty:
-        st.info("표시할 참여자 데이터가 없습니다.")
-        return
-
-    total_people = int(participants["learner_id"].nunique())
-    completed_people = int(participants["is_completed"].sum())
-    avg_score_all = float(participants["total_score"].mean()) if total_people else 0.0
-    avg_completion_all = float(participants["completion_rate_q"].mean()) if total_people else 0.0
-
-    st.markdown(
-        f"""
-        <div class='dash-grid'>
-          <div class='dash-card'><div class='label'>참여자 수</div><div class='value'>{total_people}명</div></div>
-          <div class='dash-card'><div class='label'>수료자 수</div><div class='value'>{completed_people}명</div></div>
-          <div class='dash-card'><div class='label'>전체 평균 점수</div><div class='value'>{avg_score_all:.1f}/{TOTAL_SCORE}</div></div>
-          <div class='dash-card'><div class='label'>전체 평균 진행률</div><div class='value'>{avg_completion_all:.1f}%</div></div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    c_left, c_right = st.columns([1.2, 1])
-    with c_left:
-        org_view = org_summary.copy()
-        if not org_view.empty:
-            org_view["latest_activity"] = pd.to_datetime(org_view["latest_activity"], errors="coerce").dt.strftime("%Y-%m-%d %H:%M").fillna("-")
-            org_view = org_view.rename(columns={
-                "organization": "기관",
-                "participants": "참여자 수",
-                "completed": "수료자 수",
-                "completion_rate": "수료율(%)",
-                "avg_score": "평균 점수",
-                "avg_score_rate": "평균 점수율(%)",
-                "avg_completion_rate": "평균 진행률(%)",
-                "attempts_started": "참여 회차 수",
-        "completed_attempts": "완료 회차 수",
-        "total_attempts": "누적 제출 수",
-                "latest_activity": "최근 참여",
-            })
-            safe_dataframe(org_view, use_container_width=True, height=280 if compact else None)
-
-            chart_df = org_view[["기관", "평균 점수율(%)"]].set_index("기관")
-            safe_bar_chart(chart_df)
-        else:
-            st.info("기관 집계 데이터가 없습니다.")
-
-    with c_right:
-        _render_org_ranking_cards(org_summary, top_n=5 if not compact else 3)
-
-    if compact:
-        return
-
-    st.markdown("#### 👥 참가자 누적 현황")
-    org_filter_options = ["전체"] + sorted([x for x in participants_view["organization"].dropna().astype(str).unique().tolist() if x])
-    selected_org = st.selectbox("기관 필터", org_filter_options, key="org_dashboard_filter")
-
-    p_view = participants_view.copy()
-    if selected_org != "전체":
-        p_view = p_view[p_view["organization"] == selected_org]
-
-    p_view["employee_no"] = p_view.get("employee_no", "").fillna("").astype(str).replace("", "-")
-    p_view = p_view.rename(columns={
-        "employee_no": "사번",
-        "organization": "기관",
-        "name": "이름",
-        "status": "상태",
-        "total_score": "총점",
-        "score_rate": "점수율(%)",
-        "answered_questions": "제출 문항수",
-        "completed_themes": "완료 테마수",
-        "completion_rate_q": "문항 진행률(%)",
-        "total_attempts": "누적 제출 수",
-        "last_activity": "최근 참여",
-    })
-    show_cols = ["사번", "기관", "이름", "상태", "총점", "점수율(%)", "참여 회차 수", "완료 회차 수", "완료 테마수", "제출 문항수", "문항 진행률(%)", "누적 제출 수", "최근 참여"]
-    safe_dataframe(p_view[show_cols], use_container_width=True)
-
-    csv_bytes = p_view[show_cols].to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
-    st.download_button(
-        "📥 참가자 현황 CSV 다운로드",
-        data=csv_bytes,
-        file_name=f"participants_dashboard_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-        mime="text/csv",
-        use_container_width=True,
-    )
-
-
 def render_admin_page():
     st.title("🔐 관리자 대시보드")
 
@@ -2767,10 +2175,7 @@ def render_admin_page():
             st.session_state.admin_authed = False
             st.rerun()
 
-    tab1, tab2, tab3 = st.tabs(["🏢 기관 대시보드", "🧠 문항 통계", "📄 로그 관리"])
-
-    with tab1:
-        render_org_dashboard(compact=False)
+    tab2, tab3 = st.tabs(["🧠 문항 통계", "📄 로그 관리"])
 
     with tab2:
         try:
@@ -2813,6 +2218,7 @@ def render_admin_page():
                     st.error(f"복구 실패: {ee}")
         except Exception as e:
             st.error(f"로그 관리 탭 오류: {e}")
+
 
 def render_admin_question_stats():
     st.markdown("### 🛠 관리자용 문항별 정답률 통계")
@@ -3157,8 +2563,6 @@ def render_mcq_question(m_key: str, q_idx: int, q_data: dict):
             "wrong_extra": q_data["wrong_extra"],
         }
         submissions[q_idx] = result
-
-        queue_sfx("correct" if is_correct else "wrong")
         try:
             st.toast("정답입니다!" if is_correct else "다시 생각해보세요", icon="✨" if is_correct else "⚠️")
         except Exception:
@@ -3302,7 +2706,6 @@ def render_text_question(m_key: str, q_idx: int, q_data: dict):
 
         ratio = (eval_res["awarded_score"] / q_data["score"]) if q_data["score"] else 0
         is_good = ratio >= TEXT_CORRECT_THRESHOLD
-        queue_sfx("correct" if is_good else "wrong")
         try:
             st.toast("주관식 답안이 잘 작성되었어요!" if is_good else "보완 포인트를 확인해보세요", icon="✨" if is_good else "⚠️")
         except Exception:
@@ -3452,10 +2855,8 @@ if pending:
         skip_to_stage=str(pending.get("skip_to_stage", "map") or "map"),
     )
     st.rerun()
-render_audio_system()
 
 with st.sidebar:
-    st.checkbox("🔊 배경음악 재생", key="bgm_enabled")
     st.markdown("---")
     st.caption("관리자")
     if st.button("🔐 관리자 대시보드", use_container_width=True):
@@ -3468,14 +2869,14 @@ with st.sidebar:
 
 try:
     if st.session_state.stage == "intro":
-
         render_top_spacer()
 
-        intro_cover = resolve_intro_cover_image()
-        if intro_cover and intro_cover.exists():
-            st.image(str(intro_cover), use_container_width=True)
+        intro_map = get_current_map_image()
+        if intro_map:
+            show_map_with_fade(intro_map)
         else:
-            st.info("인트로 이미지를 찾을 수 없습니다. intro.png 또는 world_map_0.png 등을 app.py와 같은 폴더에 두면 표시됩니다.")
+            st.info("맵 이미지를 추가하면 인트로 연출이 더 좋아집니다.")
+
         st.markdown("<div style='height:10px;'></div>", unsafe_allow_html=True)
         st.title("🛡️ 2026 Compliance Adventure")
         st.caption("Guardian Training · 컴플라이언스 테마 정복형 학습")
@@ -3489,9 +2890,6 @@ try:
             """,
             unsafe_allow_html=True,
         )
-
-        render_intro_org_cumulative_board()
-
         emp_df, emp_meta_msg = load_employee_master_df()
 
         st.markdown("### 👤 참가자 확인")
@@ -3695,10 +3093,6 @@ try:
         wrong_like = sum(1 for r in st.session_state.attempt_history if str(r.get("is_correct", "")) in ["N", "PARTIAL"])
 
         st.balloons()
-        if not st.session_state.get("played_final_fanfare", False):
-            play_sfx_now("final")
-            st.session_state.played_final_fanfare = True
-
         st.title("🏆 Guardian Training Complete")
         st.success(f"{user_name} 가디언님, 모든 테마를 정복했습니다!")
 
@@ -3764,7 +3158,7 @@ try:
                 use_container_width=True,
             )
 
-        st.info("관리자용 기관 대시보드 / 문항 통계는 좌측 사이드바의 ‘관리자 대시보드’에서 확인할 수 있습니다.")
+        st.info("관리자용 문항 통계/로그 관리는 좌측 사이드바의 ‘관리자 대시보드’에서 확인할 수 있습니다.")
 
         st.markdown("<div class='brief-actions-wrap'></div>", unsafe_allow_html=True)
         c1, c2 = st.columns([1, 1], gap='large')
