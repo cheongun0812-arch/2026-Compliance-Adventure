@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 from datetime import datetime
 from pathlib import Path
 import csv
@@ -3011,24 +3012,44 @@ try:
             if st.button("📋 조회 결과 팝업 다시 열기", use_container_width=True, key="reopen_employee_popup"):
                 st.session_state.employee_lookup_modal_open = True
                 st.rerun()
-
         selected_emp = st.session_state.get("employee_selected_record")
         if selected_emp:
-            st.markdown("<div id='start-adventure-anchor'></div>", unsafe_allow_html=True)
-
-            # 방금 팝업에서 '이 정보로 확인'을 눌렀다면, 아래 시작 영역으로 자동 스크롤
+            # 방금 팝업에서 '이 정보로 확인'을 눌렀다면, 자동으로 시작 섹션으로 스크롤/포커스
+            # (HTML 노출을 방지하기 위해 unsafe_allow_html 없이, hidden components.html로만 스크롤 처리)
             if st.session_state.get('just_confirmed_employee', False):
                 st.session_state.just_confirmed_employee = False
                 try:
                     components.html(
-                        """
-                        <script>
-                          (function() {
-                            const el = window.parent.document.getElementById('start-adventure-anchor');
-                            if (el) { el.scrollIntoView({behavior:'smooth', block:'start'}); }
-                          })();
-                        </script>
-                        """,
+                        r'''
+<script>
+(function () {
+  function findStartButton(doc) {
+    try {
+      const buttons = Array.from(doc.querySelectorAll('button'));
+      return buttons.find(b => (b.innerText || '').includes('모험 시작하기') ||
+                               (b.innerText || '').toLowerCase().includes('start adventure'));
+    } catch (e) { return null; }
+  }
+
+  function go() {
+    try { window.scrollTo(0, 0); } catch (e) {}
+    try { if (window.parent) window.parent.scrollTo(0, 0); } catch (e) {}
+    try { if (window.top) window.top.scrollTo(0, 0); } catch (e) {}
+
+    const doc = document;
+    const parentDoc = (window.parent && window.parent.document) ? window.parent.document : null;
+
+    const btn = findStartButton(doc) || (parentDoc ? findStartButton(parentDoc) : null);
+    if (btn && btn.scrollIntoView) {
+      btn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }
+
+  // Streamlit rerun 후 DOM 렌더링 완료까지 짧게 대기
+  setTimeout(go, 80);
+})();
+</script>
+''',
                         height=0,
                     )
                 except Exception:
