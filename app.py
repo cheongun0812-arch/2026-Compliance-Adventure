@@ -132,6 +132,24 @@ div.stButton > button:first-child:hover {
     filter: brightness(1.05);
 }
 
+
+/* 다운로드 버튼 (st.download_button) — hover 시만 보이는 현상 방지 */
+div.stDownloadButton > button {
+    background-color: #FFFFFF !important;
+    color: #0B1320 !important;
+    border-radius: 12px !important;
+    border: 1px solid #2B3140 !important;
+    font-weight: 700 !important;
+    min-height: 44px !important;
+    opacity: 1 !important;
+}
+div.stDownloadButton > button:hover {
+    filter: brightness(0.98);
+}
+div.stDownloadButton > button * {
+    color: #0B1320 !important;
+    opacity: 1 !important;
+}
 /* 카드 */
 .card {
     background: #161A22;
