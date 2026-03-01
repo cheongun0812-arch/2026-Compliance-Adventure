@@ -452,6 +452,26 @@ div[data-testid="stToast"] * {
 }
 .stToast * { color: rgba(255,255,255,0.96) !important; }
 
+
+
+/* Download button: ensure text visible on light background */
+div[data-testid="stDownloadButton"] > button,
+div.stDownloadButton > button {
+    background-color: #FFFFFF !important;
+    border: 1px solid rgba(255,255,255,0.18) !important;
+    color: #0E1117 !important;
+    opacity: 1 !important;
+    font-weight: 800 !important;
+}
+div[data-testid="stDownloadButton"] > button * ,
+div.stDownloadButton > button * {
+    color: #0E1117 !important;
+    opacity: 1 !important;
+}
+div[data-testid="stDownloadButton"] > button:hover,
+div.stDownloadButton > button:hover {
+    filter: brightness(0.96) !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -1977,6 +1997,291 @@ def _load_log_df():
     return None, f"로그 파일을 읽지 못했습니다. (1차: {first_err}) (2차: {second_err})"
 
 
+# =========================================================
+# 기관(조직) 누적 현황 + 교육 종료(리셋) 유틸
+# - HTML/오디오 없이, 로그 기반으로만 집계
+# =========================================================
+
+def _load_org_targets_optional() -> dict:
+    """Optional org target headcount loader.
+
+    Supported file: org_targets.csv in BASE_DIR
+    Columns: organization/기관/부서/조직 + target/목표/대상/목표인원 등
+    """
+    candidates = ["org_targets.csv", "org_target.csv", "기관별목표인원.csv", "기관목표.csv"]
+    for name in candidates:
+        p = (BASE_DIR / name)
+        if not p.exists():
+            continue
+        try:
+            df = pd.read_csv(p, encoding="utf-8-sig")
+        except Exception:
+            try:
+                df = pd.read_csv(p, encoding="utf-8")
+            except Exception:
+                continue
+
+        if df is None or df.empty:
+            continue
+
+        cols = {c.strip(): c for c in df.columns}
+        org_col = None
+        tgt_col = None
+        for key in ["organization", "기관", "소속", "부서", "조직", "기관명", "부서명"]:
+            if key in cols:
+                org_col = cols[key]
+                break
+        for key in ["target", "목표", "대상", "목표인원", "대상인원", "headcount", "모수"]:
+            if key in cols:
+                tgt_col = cols[key]
+                break
+
+        if not org_col or not tgt_col:
+            continue
+
+        out = {}
+        for _, r in df[[org_col, tgt_col]].dropna().iterrows():
+            org = str(r[org_col]).strip()
+            if not org:
+                continue
+            try:
+                out[org] = int(float(r[tgt_col]))
+            except Exception:
+                continue
+        return out
+    return {}
+
+
+def _participation_rate_score(rate_pct: float) -> float:
+    """Map participation rate(%) to a score(0~10) as requested.
+
+    - >= 100%: 10.0
+    - [98, 100): 8.0 ~ 9.9 (linear)
+    - [96, 98): 6.0 ~ 7.9 (linear)
+    - <= 96: 5.0 ~ 5.9 (linear, min 5.0)
+    """
+    try:
+        r = float(rate_pct)
+    except Exception:
+        return 0.0
+
+    if r >= 100.0:
+        return 10.0
+    if 98.0 <= r < 100.0:
+        # 98 -> 8.0, 99.9 -> 9.9 (cap)
+        v = 8.0 + (r - 98.0) * (1.9 / 2.0)
+        return float(min(9.9, max(8.0, v)))
+    if 96.0 <= r < 98.0:
+        # 96 -> 6.0, 98-ε -> 7.9
+        v = 6.0 + (r - 96.0) * (1.9 / 2.0)
+        return float(min(7.9, max(6.0, v)))
+    # <= 96
+    # 0 -> 5.0, 96 -> 5.9
+    v = 5.0 + (max(0.0, min(96.0, r)) / 96.0) * 0.9
+    return float(min(5.9, max(5.0, v)))
+
+
+def _compute_attempt_totals_from_log(df: pd.DataFrame) -> pd.DataFrame:
+    """Compute per-attempt totals from question-level log rows.
+
+    If an END marker row exists (question_type == 'END'), we use its awarded_score/max_score
+    as total score for the attempt (prevents double counting).
+    Otherwise, we sum awarded_score/max_score across questions.
+    """
+    if df is None or df.empty:
+        return pd.DataFrame(columns=[
+            "training_attempt_id", "employee_no", "name", "organization",
+            "attempt_round", "total_awarded", "total_max", "last_ts"
+        ])
+
+    tmp = _coerce_log_df(df).copy()
+
+    # Normalize types
+    tmp["training_attempt_id"] = tmp.get("training_attempt_id", "").astype(str)
+    tmp["employee_no"] = tmp.get("employee_no", "").astype(str)
+    tmp["name"] = tmp.get("name", "").astype(str)
+    tmp["organization"] = tmp.get("organization", "").astype(str).replace("", "미분류")
+    tmp["attempt_round"] = pd.to_numeric(tmp.get("attempt_round", 1), errors="coerce").fillna(1).astype(int)
+    tmp["awarded_score"] = pd.to_numeric(tmp.get("awarded_score", 0), errors="coerce").fillna(0).astype(int)
+    tmp["max_score"] = pd.to_numeric(tmp.get("max_score", 0), errors="coerce").fillna(0).astype(int)
+
+    # Timestamp parsing (best-effort)
+    if "timestamp" in tmp.columns:
+        ts = pd.to_datetime(tmp["timestamp"], errors="coerce")
+    else:
+        ts = pd.to_datetime(pd.Series([None] * len(tmp)), errors="coerce")
+    tmp["_ts"] = ts
+
+    keys = ["training_attempt_id", "employee_no", "name", "organization", "attempt_round"]
+
+    def agg(g: pd.DataFrame) -> pd.Series:
+        end_rows = g[g.get("question_type", "").astype(str).str.upper() == "END"]
+        if not end_rows.empty:
+            total_aw = int(end_rows["awarded_score"].max())
+            total_mx = int(end_rows["max_score"].max()) if int(end_rows["max_score"].max()) > 0 else int(g["max_score"].sum())
+        else:
+            total_aw = int(g["awarded_score"].sum())
+            total_mx = int(g["max_score"].sum())
+        last_ts = g["_ts"].max()
+        return pd.Series({"total_awarded": total_aw, "total_max": total_mx, "last_ts": last_ts})
+
+    out = tmp.groupby(keys, dropna=False).apply(agg).reset_index()
+    # Fill empty attempt_id for legacy logs
+    out["training_attempt_id"] = out["training_attempt_id"].astype(str).replace("", np.nan)
+    out["training_attempt_id"] = out["training_attempt_id"].fillna("legacy|" + out["organization"].astype(str) + "|" + out["name"].astype(str))
+    return out
+
+
+def _compute_org_snapshot(organization: str) -> dict:
+    """Return org-level snapshot and ranking based on logs."""
+    org = str(organization or "").strip() or "미분류"
+    df, err = _load_log_df()
+    if err or df is None or df.empty:
+        return {
+            "organization": org,
+            "participants": 0,
+            "avg_score_rate": None,
+            "rank": None,
+            "total_orgs": 0,
+            "target": None,
+            "participation_rate": None,
+            "participation_rate_score": None,
+            "leader_top": pd.DataFrame(),
+        }
+
+    attempts = _compute_attempt_totals_from_log(df)
+
+    # Learner id
+    attempts["learner_id"] = attempts["employee_no"].astype(str).where(
+        attempts["employee_no"].astype(str).str.strip() != "",
+        attempts["organization"].astype(str) + "|" + attempts["name"].astype(str)
+    )
+
+    # Use best attempt per learner (max total_awarded)
+    best = attempts.sort_values(["learner_id", "total_awarded", "last_ts"], ascending=[True, False, False])                   .groupby("learner_id", as_index=False).head(1)
+
+    # Org aggregation
+    org_grp = best.groupby("organization", as_index=False).agg(
+        participants=("learner_id", "nunique"),
+        avg_awarded=("total_awarded", "mean"),
+        avg_max=("total_max", "mean"),
+        last_activity=("last_ts", "max"),
+    )
+
+    # Score rate (%) based on TOTAL_SCORE if available, else avg_max
+    denom = float(TOTAL_SCORE) if "TOTAL_SCORE" in globals() and TOTAL_SCORE else None
+    if denom and denom > 0:
+        org_grp["avg_score_rate"] = (org_grp["avg_awarded"] / denom) * 100.0
+    else:
+        org_grp["avg_score_rate"] = np.where(org_grp["avg_max"] > 0, (org_grp["avg_awarded"] / org_grp["avg_max"]) * 100.0, np.nan)
+
+    # Ranking: higher avg_score_rate first, then participants
+    org_grp = org_grp.sort_values(["avg_score_rate", "participants"], ascending=[False, False]).reset_index(drop=True)
+    org_grp["rank"] = np.arange(1, len(org_grp) + 1)
+
+    me = org_grp[org_grp["organization"].astype(str) == org]
+    if me.empty:
+        me_row = {"participants": 0, "avg_score_rate": np.nan, "rank": None}
+    else:
+        me_row = me.iloc[0].to_dict()
+
+    # Optional targets
+    targets = _load_org_targets_optional()
+    target = targets.get(org)
+    part_rate = None
+    part_score = None
+    if target and target > 0:
+        part_rate = (float(me_row.get("participants", 0)) / float(target)) * 100.0
+        part_score = _participation_rate_score(part_rate)
+
+    # leader top 5
+    leader = org_grp[["rank", "organization", "participants", "avg_score_rate", "last_activity"]].head(5).copy()
+    if not leader.empty:
+        leader["avg_score_rate"] = leader["avg_score_rate"].round(1)
+        leader["last_activity"] = leader["last_activity"].astype(str).str.replace("T", " ").str.slice(0, 19)
+
+    return {
+        "organization": org,
+        "participants": int(me_row.get("participants", 0) or 0),
+        "avg_score_rate": None if pd.isna(me_row.get("avg_score_rate")) else float(me_row.get("avg_score_rate")),
+        "rank": None if me_row.get("rank") in [None, ""] else int(me_row.get("rank")),
+        "total_orgs": int(len(org_grp)),
+        "target": int(target) if target is not None else None,
+        "participation_rate": None if part_rate is None else float(part_rate),
+        "participation_rate_score": None if part_score is None else float(part_score),
+        "leader_top": leader,
+    }
+
+
+def _append_training_end_log_row(total_score: int, total_max: int) -> None:
+    """Append a synthetic END row so org stats can reflect the final score reliably."""
+    u = st.session_state.get("user_info", {}) or {}
+    append_attempt_log(
+        mission_key="__END__",
+        q_idx=9999,
+        q_type="END",
+        payload={
+            "question": "TRAINING_END",
+            "selected_or_text": "",
+            "is_correct": "Y",
+            "awarded_score": int(total_score or 0),
+            "max_score": int(total_max or 0),
+            "employee_no": str(u.get("employee_no", "")).strip(),
+            "name": str(u.get("name", "")).strip(),
+            "organization": str(u.get("org", "")).strip() or "미분류",
+        },
+    )
+
+
+if hasattr(st, "dialog"):
+    @st.dialog("🧾 교육 리뷰")
+    def _render_training_review_dialog(user_name: str, org_snapshot: dict, my_score: int, my_max: int, my_grade: str):
+        st.subheader("개인 결과")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("내 점수", f"{my_score} / {my_max}")
+        c2.metric("등급", my_grade)
+        c3.metric("소속", org_snapshot.get("organization", "미분류") or "미분류")
+
+        st.divider()
+        st.subheader("소속 기관 현황(누적)")
+        oc1, oc2, oc3 = st.columns(3)
+        oc1.metric("참여자(명)", f"{org_snapshot.get('participants', 0)}")
+        avg_rate = org_snapshot.get("avg_score_rate")
+        oc2.metric("기관 평균점수(%)", "-" if avg_rate is None else f"{avg_rate:.1f}%")
+        rank = org_snapshot.get("rank")
+        total_orgs = org_snapshot.get("total_orgs", 0)
+        oc3.metric("기관 순위", "-" if rank is None else f"{rank} / {total_orgs}")
+
+        # Optional participation targets
+        if org_snapshot.get("target") is not None:
+            st.divider()
+            tc1, tc2, tc3 = st.columns(3)
+            tc1.metric("목표 인원(명)", f"{org_snapshot.get('target')}")
+            pr = org_snapshot.get("participation_rate")
+            tc2.metric("참여율(%)", "-" if pr is None else f"{pr:.1f}%")
+            prs = org_snapshot.get("participation_rate_score")
+            tc3.metric("참여율 점수(10점 만점)", "-" if prs is None else f"{prs:.1f}")
+
+        leader = org_snapshot.get("leader_top")
+        if isinstance(leader, pd.DataFrame) and not leader.empty:
+            st.divider()
+            st.subheader("상위 기관 (Top 5)")
+            st.table(leader)
+
+        st.divider()
+        end_c1, end_c2 = st.columns([1, 1])
+        with end_c1:
+            if st.button("✅ 교육 종료(정보 초기화)", use_container_width=True, key="end_training_in_dialog"):
+                # Ensure the END row is written before reset
+                _append_training_end_log_row(my_score, my_max)
+                reset_game()
+        with end_c2:
+            if st.button("닫기", use_container_width=True, key="close_review_dialog"):
+                st.session_state["review_dialog_open"] = False
+                st.rerun()
+
+
+
 def _build_participant_snapshot(df: pd.DataFrame):
     df = df.copy()
 
@@ -3160,14 +3465,28 @@ try:
 
         st.info("관리자용 문항 통계/로그 관리는 좌측 사이드바의 ‘관리자 대시보드’에서 확인할 수 있습니다.")
 
-        st.markdown("<div class='brief-actions-wrap'></div>", unsafe_allow_html=True)
-        c1, c2 = st.columns([1, 1], gap='large')
-        with c1:
-            if st.button("🗺️ 지도 다시 보기", use_container_width=True):
-                st.session_state.stage = "map"
+        # -----------------------------------------------------
+        # 교육 리뷰(팝업) + 교육 종료(정보 초기화 후 첫 화면)
+        # -----------------------------------------------------
+        if "review_dialog_open" not in st.session_state:
+            st.session_state["review_dialog_open"] = False
+
+        user_name = st.session_state.user_info.get("name", "가디언")
+        user_org = st.session_state.user_info.get("org", "") or "미분류"
+        org_snapshot = _compute_org_snapshot(user_org)
+
+        a1, a2, a3 = st.columns([1, 1, 1], gap="large")
+        with a1:
+            if st.button("🧾 리뷰 보기", use_container_width=True, key="open_review_dialog_btn"):
+                st.session_state["review_dialog_open"] = True
                 st.rerun()
-        with c2:
-            if st.button("🔄 다시 도전", use_container_width=True):
+        with a2:
+            if st.button("✅ 교육 종료", use_container_width=True, key="end_training_btn"):
+                # Ensure the END marker row is written before reset
+                _append_training_end_log_row(score, TOTAL_SCORE)
+                reset_game()
+        with a3:
+            if st.button("🔄 다시 도전", use_container_width=True, key="retry_from_ending_btn"):
                 u = st.session_state.get("user_info", {}) or {}
                 emp_no = str(u.get("employee_no", "")).strip()
                 emp_name = str(u.get("name", "")).strip()
@@ -3183,6 +3502,16 @@ try:
                     else:
                         _set_retry_offer({"employee_no": emp_no, "name": emp_name, "org": emp_org}, completed_attempts, context="ending")
                         st.rerun()
+
+        # Open review dialog (if supported)
+        if st.session_state.get("review_dialog_open") and hasattr(st, "dialog"):
+            _render_training_review_dialog(
+                user_name=user_name,
+                org_snapshot=org_snapshot,
+                my_score=score,
+                my_max=TOTAL_SCORE,
+                my_grade=grade,
+            )
 
         render_retry_offer_box("ending")
     else:
