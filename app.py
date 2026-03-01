@@ -1469,40 +1469,70 @@ def _render_employee_lookup_popup_body(name_query: str = ""):
     show_df = candidates[["employee_no", "name", "organization"]].copy()
     show_df.columns = ["사번", "이름", "소속 기관"]
 
-    safe_dataframe(show_df, use_container_width=True, height=min(320, 90 + len(show_df) * 35))
+    # 체크박스 기반 선택 UI (동명이인 대응)
+    select_df = show_df.copy()
+    select_df.insert(0, "선택", False)
+
+    # 이전 선택값이 있으면 해당 행을 기본 선택
+    prev = st.session_state.get("employee_selected_record") or {}
+    if prev:
+        for i, row in candidates.iterrows():
+            if str(row.get("employee_no", "")).strip() == str(prev.get("employee_no", "")).strip() and str(row.get("name", "")).strip() == str(prev.get("name", "")).strip():
+                try:
+                    select_df.loc[int(i), "선택"] = True
+                except Exception:
+                    pass
+                break
+    else:
+        # 기본은 첫 번째 후보를 선택(후보가 1명인 경우 UX 단순화)
+        if len(select_df) == 1:
+            select_df.loc[0, "선택"] = True
 
     exact_name = (name_query or "").strip()
     exact_cnt = int((candidates["name"].astype(str).str.strip() == exact_name).sum()) if exact_name else 0
     if exact_cnt >= 2:
         st.warning(f"동명이인 {exact_cnt}명이 확인되었습니다. 반드시 사번을 확인해 선택해주세요.")
 
-    options = list(range(len(candidates)))
-    default_idx = 0
-    if st.session_state.get("employee_selected_record"):
-        sel = st.session_state.get("employee_selected_record") or {}
-        for i, row in candidates.iterrows():
-            if str(row.get("employee_no", "")).strip() == str(sel.get("employee_no", "")).strip() and str(row.get("name", "")).strip() == str(sel.get("name", "")).strip():
-                default_idx = int(i)
-                break
-
-    selected_idx = st.selectbox(
-        "본인 정보 선택",
-        options=options,
-        index=default_idx if options else 0,
-        format_func=lambda i: _employee_candidate_label(candidates.iloc[int(i)].to_dict()),
-        key="employee_candidate_select_idx_modal",
+    edited = st.data_editor(
+        select_df,
+        use_container_width=True,
+        hide_index=True,
+        height=min(320, 90 + len(select_df) * 35),
+        column_config={
+            "선택": st.column_config.CheckboxColumn("선택", help="본인 정보 1개만 선택하세요.", width="small"),
+        },
+        disabled=["사번", "이름", "소속 기관"],
+        key="employee_candidate_checkbox_table",
     )
 
-    preview = candidates.iloc[int(selected_idx)].to_dict()
-    p1, p2, p3 = st.columns(3)
-    _render_modal_readonly_field(p1, "사번", str(preview.get("employee_no", "")))
-    _render_modal_readonly_field(p2, "이름", str(preview.get("name", "")))
-    _render_modal_readonly_field(p3, "소속 기관", str(preview.get("organization", "")))
+    selected_rows = edited[edited["선택"] == True]  # noqa: E712
+    selected_idx = None
+    if len(selected_rows) == 1:
+        # 원본 candidates 인덱스는 edited의 행 순서와 동일
+        selected_idx = int(selected_rows.index[0])
+
+    # 선택된 1건이 있으면 하단 미리보기 카드 표시
+    if selected_idx is not None and 0 <= selected_idx < len(candidates):
+        preview = candidates.iloc[int(selected_idx)].to_dict()
+        p1, p2, p3 = st.columns(3)
+        _render_modal_readonly_field(p1, "사번", str(preview.get("employee_no", "")))
+        _render_modal_readonly_field(p2, "이름", str(preview.get("name", "")))
+        _render_modal_readonly_field(p3, "소속 기관", str(preview.get("organization", "")))
+    else:
+        st.caption("왼쪽 체크박스로 본인 정보를 1개 선택하세요.")
 
     st.markdown("<div class='brief-actions-wrap'></div>", unsafe_allow_html=True)
     c1, c2 = st.columns([1, 1], gap='large')
     with c1:
         if st.button("✅ 이 정보로 확인", key="employee_modal_confirm_btn", use_container_width=True):
+            if selected_idx is None:
+                st.warning("본인 정보를 1개만 선택해 주세요(체크박스).")
+                st.stop()
+            # 안전: 2개 이상 선택 여부 재확인
+            if int((edited["선택"] == True).sum()) != 1:  # noqa: E712
+                st.warning("본인 정보를 1개만 선택해 주세요(체크박스).")
+                st.stop()
+
             row = candidates.iloc[int(selected_idx)].to_dict()
             st.session_state.employee_selected_record = {
                 "employee_no": str(row.get("employee_no", "")).strip(),
