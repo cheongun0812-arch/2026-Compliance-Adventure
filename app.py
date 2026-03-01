@@ -452,26 +452,6 @@ div[data-testid="stToast"] * {
 }
 .stToast * { color: rgba(255,255,255,0.96) !important; }
 
-
-
-/* Download button: ensure text visible on light background */
-div[data-testid="stDownloadButton"] > button,
-div.stDownloadButton > button {
-    background-color: #FFFFFF !important;
-    border: 1px solid rgba(255,255,255,0.18) !important;
-    color: #0E1117 !important;
-    opacity: 1 !important;
-    font-weight: 800 !important;
-}
-div[data-testid="stDownloadButton"] > button * ,
-div.stDownloadButton > button * {
-    color: #0E1117 !important;
-    opacity: 1 !important;
-}
-div[data-testid="stDownloadButton"] > button:hover,
-div.stDownloadButton > button:hover {
-    filter: brightness(0.96) !important;
-}
 </style>
 """, unsafe_allow_html=True)
 
@@ -585,6 +565,218 @@ def safe_bar_chart(data, **kwargs):
 BASE_DIR = Path(__file__).parent if "__file__" in globals() else Path.cwd()
 ASSET_DIR = BASE_DIR
 LOG_FILE = BASE_DIR / "compliance_training_log.csv"
+TRAINING_RESULT_FILE = BASE_DIR / "training_results.csv"
+
+RESULT_FIELDNAMES = [
+    "employee_no", "name", "organization",
+    "started_at", "ended_at", "duration_seconds",
+    "final_score", "final_score_max", "final_score_rate",
+    "grade",
+    "attempt_round", "training_attempt_id",
+    "theme_scores_json",
+]
+
+def _ensure_result_schema_file():
+    try:
+        if not TRAINING_RESULT_FILE.exists():
+            with open(TRAINING_RESULT_FILE, "w", newline="", encoding="utf-8-sig") as f:
+                writer = csv.DictWriter(f, fieldnames=RESULT_FIELDNAMES)
+                writer.writeheader()
+    except Exception as e:
+        # 결과 로그가 안 써져도 학습은 진행돼야 하므로 예외는 세션에만 보관
+        st.session_state.result_write_error = str(e)
+
+def append_training_result_row(row: dict):
+    """최종 결과(1인 1레코드)만 영구 저장."""
+    _ensure_result_schema_file()
+    normalized = {k: row.get(k, "") for k in RESULT_FIELDNAMES}
+    try:
+        file_exists = TRAINING_RESULT_FILE.exists()
+        with open(TRAINING_RESULT_FILE, "a", newline="", encoding="utf-8-sig") as f:
+            writer = csv.DictWriter(f, fieldnames=RESULT_FIELDNAMES)
+            if not file_exists:
+                writer.writeheader()
+            writer.writerow(normalized)
+    except Exception as e:
+        st.session_state.result_write_error = str(e)
+
+def load_training_results_df() -> pd.DataFrame:
+    if not TRAINING_RESULT_FILE.exists():
+        return pd.DataFrame(columns=RESULT_FIELDNAMES)
+    for enc in ["utf-8-sig", "utf-8", "cp949", "euc-kr"]:
+        try:
+            df = pd.read_csv(TRAINING_RESULT_FILE, encoding=enc)
+            break
+        except Exception:
+            df = None
+    if df is None:
+        return pd.DataFrame(columns=RESULT_FIELDNAMES)
+    df.columns = [str(c).strip() for c in df.columns]
+    return df
+
+ORG_TARGET_FILE_CANDIDATES = [BASE_DIR / 'org_targets.csv', BASE_DIR / 'org_targets.xlsx']
+
+ORG_TARGET_COL_ALIASES = {
+    'organization': ['organization','org','기관','소속','부서','조직','본부','팀'],
+    'target': ['target','targets','goal','목표','대상','목표인원','대상인원','정원','headcount','인원'],
+}
+
+def load_org_targets_df() -> pd.DataFrame:
+    """기관별 목표 인원 로드. 없으면 빈 DF."""
+    for p in ORG_TARGET_FILE_CANDIDATES:
+        if not p.exists():
+            continue
+        try:
+            if p.suffix.lower() in ['.xlsx','.xls']:
+                raw = pd.read_excel(p)
+            else:
+                raw = None
+                for enc in ['utf-8-sig','cp949','euc-kr','utf-8']:
+                    try:
+                        raw = pd.read_csv(p, encoding=enc)
+                        break
+                    except Exception:
+                        continue
+                if raw is None:
+                    raw = pd.read_csv(p, engine='python', on_bad_lines='skip')
+            if raw is None or raw.empty:
+                continue
+            raw.columns = [str(c).strip() for c in raw.columns]
+            org_col = _find_first_matching_column(raw.columns, ORG_TARGET_COL_ALIASES['organization'])
+            tgt_col = _find_first_matching_column(raw.columns, ORG_TARGET_COL_ALIASES['target'])
+            if org_col is None or tgt_col is None:
+                continue
+            df = pd.DataFrame({'organization': raw[org_col], 'target': raw[tgt_col]})
+            df['organization'] = df['organization'].fillna('').astype(str).str.strip()
+            df['target'] = pd.to_numeric(df['target'].astype(str).str.replace(',','',regex=False).str.replace('명','',regex=False).str.strip(), errors='coerce')
+            df = df.dropna(subset=['target'])
+            df = df[df['organization']!=''].copy()
+            df['target'] = df['target'].astype(int)
+            df = df.drop_duplicates(subset=['organization']).reset_index(drop=True)
+            return df
+        except Exception:
+            continue
+    return pd.DataFrame(columns=['organization','target'])
+
+
+def participation_rate_score(rate_pct: float) -> float:
+    """참여율(%) → 참여율점수(5~10).
+    룰:
+    - 100% 이상: 10.0
+    - 98.0~99.9: 8.0~9.9 (선형)
+    - 96.0~97.9: 6.0~7.9 (선형)
+    - 96.0 이하: 5.0~5.9 (선형, 최소 5)
+    """
+    if rate_pct is None or pd.isna(rate_pct):
+        return float('nan')
+    r = max(0.0, float(rate_pct))
+
+    if r >= 100.0:
+        return 10.0
+
+    if 98.0 <= r < 100.0:
+        # 98.0 → 8.0, 99.9 → 9.9
+        v = 8.0 + ((r - 98.0) / 2.0) * 1.9
+        return round(min(9.9, max(8.0, v)), 1)
+
+    if 96.0 <= r < 98.0:
+        # 96.0 → 6.0, 97.9... → 7.9
+        v = 6.0 + ((r - 96.0) / 2.0) * 1.9
+        return round(min(7.9, max(6.0, v)), 1)
+
+    # 0 → 5.0, 96 → 5.9
+    v = 5.0 + (min(r, 96.0) / 96.0) * 0.9
+    return round(min(5.9, max(5.0, v)), 1)
+
+
+def compute_org_scoreboard(results_df: pd.DataFrame, targets_df: pd.DataFrame) -> pd.DataFrame:
+    """기관 점수/현황 집계.
+    - participants: 고유 사번 기준
+    - avg_score_rate: 평균 득점률(%)
+    - accumulated_score: 득점률 합(참가자 합계)
+    - participation_rate(%): participants/target*100
+    - participation_rate_score: 위 로직
+    - rank: accumulated_score desc
+    """
+    if results_df is None or results_df.empty:
+        return pd.DataFrame(columns=['rank','organization','participants','target','participation_rate','participation_rate_score','avg_score_rate','accumulated_score'])
+
+    df = results_df.copy()
+    # 표준 컬럼
+    if 'organization' not in df.columns:
+        return pd.DataFrame(columns=['rank','organization','participants','target','participation_rate','participation_rate_score','avg_score_rate','accumulated_score'])
+
+    df['organization'] = df['organization'].fillna('').astype(str).str.strip().replace('', '미분류')
+    # 득점률
+    if 'final_score_rate' in df.columns:
+        df['final_score_rate'] = pd.to_numeric(df['final_score_rate'], errors='coerce')
+    else:
+        df['final_score_rate'] = pd.to_numeric(df.get('final_score', 0), errors='coerce')
+
+    # 고유 참가자(사번 기준)
+    df['employee_no'] = df.get('employee_no','').fillna('').astype(str).str.strip()
+
+    agg = df.groupby('organization').agg(
+        participants=('employee_no', lambda s: s[s!=''].nunique() if len(s)>0 else 0),
+        avg_score_rate=('final_score_rate','mean'),
+        accumulated_score=('final_score_rate','sum'),
+    ).reset_index()
+
+    if targets_df is not None and not targets_df.empty:
+        t = targets_df.copy()
+        t['organization'] = t['organization'].fillna('').astype(str).str.strip()
+        agg = agg.merge(t, on='organization', how='left')
+    else:
+        agg['target'] = pd.NA
+
+    agg['participation_rate'] = agg.apply(lambda r: (r['participants']/r['target']*100.0) if pd.notna(r.get('target')) and r.get('target') and r['target']>0 else pd.NA, axis=1)
+    agg['participation_rate_score'] = agg['participation_rate'].apply(lambda x: participation_rate_score(x) if pd.notna(x) else pd.NA)
+
+    agg = agg.sort_values(by=['accumulated_score','avg_score_rate','participants'], ascending=[False,False,False]).reset_index(drop=True)
+    agg['rank'] = agg.index + 1
+
+    # 정리/포맷용
+    for c in ['avg_score_rate','accumulated_score','participation_rate','participation_rate_score']:
+        if c in agg.columns:
+            agg[c] = pd.to_numeric(agg[c], errors='coerce')
+
+    return agg[['rank','organization','participants','target','participation_rate','participation_rate_score','avg_score_rate','accumulated_score']]
+
+
+def render_org_electronic_board(container):
+    """사이드바/관리자 화면에 기관별 전광판(항상 노출)"""
+    results = load_training_results_df()
+    targets = load_org_targets_df()
+    board = compute_org_scoreboard(results, targets)
+
+    container.markdown("### 🏢 기관 참여·점수 현황(전광판)")
+    if board.empty:
+        container.info("아직 집계할 최종 결과 로그가 없습니다. (참가자가 '교육 종료'를 누르면 집계됩니다.)")
+        return
+
+    # 전체 요약
+    total_orgs = int(board['organization'].nunique())
+    total_participants = int(board['participants'].sum())
+    avg_score = float(board['avg_score_rate'].mean()) if pd.notna(board['avg_score_rate']).any() else float('nan')
+    c1, c2, c3 = container.columns(3)
+    c1.metric("집계 기관 수", f"{total_orgs}")
+    c2.metric("총 참여자(명)", f"{total_participants}")
+    c3.metric("전체 평균점수(%)", f"{avg_score:.1f}%" if avg_score==avg_score else "-")
+
+    # 상위 5
+    top = board.head(5).copy()
+    disp = top.rename(columns={
+        'rank':'순위','organization':'기관','participants':'참여자(명)','target':'목표(명)',
+        'participation_rate':'참여율(%)','participation_rate_score':'참여율점수',
+        'avg_score_rate':'평균점수(%)','accumulated_score':'누적점수'
+    })
+    for col in ['참여율(%)','평균점수(%)','누적점수']:
+        if col in disp.columns:
+            disp[col] = disp[col].apply(lambda x: f"{float(x):.1f}" if pd.notna(x) else "-")
+    if '참여율점수' in disp.columns:
+        disp['참여율점수'] = disp['참여율점수'].apply(lambda x: f"{float(x):.1f}" if pd.notna(x) else "-")
+    container.table(disp[['순위','기관','참여자(명)','목표(명)','참여율(%)','참여율점수','평균점수(%)','누적점수']])
+
 LOG_FIELDNAMES = [
     "timestamp",
     "training_attempt_id",
@@ -622,7 +814,14 @@ ENDING_IMAGE_CANDIDATE_NAMES = [
 # --- 관리자 통계/채점 기준 ---
 TEXT_CORRECT_THRESHOLD = 0.7  # 주관식 점수율 70% 이상이면 '정답'으로 집계
 
-# --- 아이콘 자원 ---
+# --- 사운드 / 아이콘 자원 ---
+SFX = {
+    "correct": BASE_DIR / "sfx_correct.mp3",
+    "wrong": BASE_DIR / "sfx_wrong.mp3",
+    "conquer": BASE_DIR / "sfx_conquer.mp3",
+    "final": BASE_DIR / "sfx_final.mp3",
+}
+
 THEME_ICONS = {
     "subcontracting": "🚜",
     "security": "🔐",
@@ -645,7 +844,22 @@ EMPLOYEE_COL_ALIASES = {
     "organization": ["organization", "org", "department", "dept", "소속", "소속기관", "기관", "조직", "본부", "부서"],
 }
 
+# 전체 과정 공통 BGM (권장 파일명)
+GLOBAL_BGM_CANDIDATE_NAMES = [
+    "2026 Compliance Adventure_bgm.mp3",  # 사용자 지정 최종 파일명
+    "2026_Compliance_Adventure_bgm.mp3",
+    "bgm_main.mp3",
+]
 
+# 구버전 단계별 파일명도 fallback 지원 (기존 운영 호환)
+BGM = {
+    "intro": BASE_DIR / "bgm_intro.mp3",
+    "map": BASE_DIR / "bgm_map.mp3",
+    "subcontracting": BASE_DIR / "bgm_subcontracting.mp3",
+    "security": BASE_DIR / "bgm_security.mp3",
+    "fairtrade": BASE_DIR / "bgm_fairtrade.mp3",
+    "ending": BASE_DIR / "bgm_final.mp3",
+}
 
 ADMIN_PASSWORD = os.environ.get("COMPLIANCE_ADMIN_PASSWORD", "admin2026")
 
@@ -847,7 +1061,11 @@ def init_state():
         "map_celebrate_theme": None,
         "last_cleared_mission": None,
         "log_write_error": None,
-"admin_authed": False,
+        "played_final_fanfare": False,
+        "admin_authed": False,
+        "pending_sfx": None,
+        "bgm_enabled": True,
+        "audio_debug": False,
         "employee_lookup_candidates": [],
         "employee_selected_record": None,
         "employee_lookup_modal_open": False,
@@ -863,6 +1081,53 @@ def recalc_total_score():
     theme_sum = int(sum(st.session_state.mission_scores.values()))
     st.session_state.score = theme_sum + int(st.session_state.get("participation_score", 0) or 0)
 
+
+def _render_review_contents(user_name: str, user_org: str, score: int, score_max: int):
+    """최종 완료 후 리뷰(개인 + 기관 현황)."""
+    grade = get_grade(score, score_max)
+    st.subheader("개인 결과")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("내 점수", f"{score} / {score_max}")
+    c2.metric("등급", grade)
+    c3.metric("소속", user_org or "-")
+
+    # 기관 현황(누적)
+    st.markdown("---")
+    st.subheader("소속 기관 현황(누적)")
+    results = load_training_results_df()
+    targets = load_org_targets_df()
+    board = compute_org_scoreboard(results, targets)
+
+    if board.empty:
+        st.info("아직 집계할 최종 결과 로그가 없습니다.")
+        return
+
+    my_row = board[board["organization"] == (user_org or "미분류")].head(1)
+    if my_row.empty:
+        st.info("현재 소속 기관의 집계 정보가 없습니다.")
+    else:
+        r = my_row.iloc[0].to_dict()
+        p1, p2, p3 = st.columns(3)
+        p1.metric("참여자(명)", f"{int(r.get('participants',0))}")
+        p2.metric("기관 평균점수(%)", f"{float(r.get('avg_score_rate',0.0)):.1f}%")
+        p3.metric("기관 순위", f"{int(r.get('rank',0))} / {len(board)}")
+        if pd.notna(r.get("target")):
+            st.caption(f"목표(명): {int(r.get('target'))} · 참여율(%): {float(r.get('participation_rate')):.1f}% · 참여율점수: {float(r.get('participation_rate_score')):.1f}")
+
+    st.markdown("---")
+    st.subheader("상위 기관(Top 5)")
+    top = board.head(5).copy()
+    disp = top.rename(columns={
+        'rank':'순위','organization':'기관','participants':'참여자(명)','target':'목표(명)',
+        'participation_rate':'참여율(%)','participation_rate_score':'참여율점수',
+        'avg_score_rate':'평균점수(%)','accumulated_score':'누적점수'
+    })
+    for col in ['참여율(%)','평균점수(%)','누적점수']:
+        if col in disp.columns:
+            disp[col] = disp[col].apply(lambda x: f"{float(x):.1f}" if pd.notna(x) else "-")
+    if '참여율점수' in disp.columns:
+        disp['참여율점수'] = disp['참여율점수'].apply(lambda x: f"{float(x):.1f}" if pd.notna(x) else "-")
+    st.table(disp[['순위','기관','참여자(명)','목표(명)','참여율(%)','참여율점수','평균점수(%)','누적점수']])
 
 def theme_max_score(m_key: str) -> int:
     return int(sum(q.get("score", 0) for q in SCENARIOS.get(m_key, {}).get("quiz", [])))
@@ -948,8 +1213,13 @@ def mark_theme_complete_if_ready(m_key: str):
             st.session_state.map_fx_done = False
             st.session_state.map_celebrate_theme = m_key
             st.session_state.map_celebrate_until = float(time.time()) + 5.0
+            # 테마 정복 사운드 큐 (최종 정복은 fanfare 우선)
+            if len(st.session_state.completed) >= len(SCENARIO_ORDER):
+                queue_sfx("final")
+            else:
+                queue_sfx("conquer")
 # =========================================================
-# 5) 유틸 함수 (이미지 / 로그 / 평가)
+# 5) 유틸 함수 (이미지 / 사운드 / 로그 / 평가)
 # =========================================================
 def get_current_map_image():
     stage_idx = min(len(st.session_state.get("completed", [])), 3)
@@ -1008,7 +1278,86 @@ def show_map_with_fade(map_path: Path, caption: str = None, celebrate: bool = Fa
             st.caption(caption)
 
 
+from typing import Optional
 
+def resolve_bgm_path(bgm_key: str) -> Optional[Path]:
+    # 1) 전체 공통 BGM 우선 사용
+    for name in GLOBAL_BGM_CANDIDATE_NAMES:
+        gp = BASE_DIR / name
+        if gp.exists():
+            return gp
+    # 2) 없으면 단계별 BGM fallback
+    p = BGM.get(bgm_key)
+    if p and p.exists():
+        return p
+    return None
+
+
+def _audio_component_html(audio_b64: str, *, loop: bool = False, hidden_label: str = "audio"):
+    loop_attr = " loop" if loop else ""
+    html = f"""
+    <html>
+      <body style="margin:0; padding:0; background:transparent;">
+        <audio id="{hidden_label}" autoplay{loop_attr} playsinline webkit-playsinline preload="auto" style="display:none;">
+          <source src="data:audio/mp3;base64,{audio_b64}" type="audio/mpeg">
+        </audio>
+        <script>
+          (function() {{
+            const a = document.getElementById("{hidden_label}");
+            if (!a) return;
+            a.volume = 0.65;
+            const tryPlay = () => {{
+              const p = a.play();
+              if (p && p.catch) p.catch(() => {{}});
+            }};
+            // 최초 진입 시 자동재생 시도
+            tryPlay();
+            setTimeout(tryPlay, 120);
+            setTimeout(tryPlay, 400);
+            // 브라우저 자동재생 제한 시 첫 사용자 상호작용에서 재시도
+            ["click", "keydown", "touchstart"].forEach((evt) => {{
+              document.addEventListener(evt, tryPlay, {{ once: false, passive: true }});
+            }});
+          }})();
+        </script>
+      </body>
+    </html>
+    """
+    components.html(html, height=0, width=0)
+
+
+def queue_sfx(sfx_key: str):
+    st.session_state.pending_sfx = sfx_key
+
+
+def play_sfx_now(sfx_key: str):
+    sfx_path = SFX.get(sfx_key)
+    if not sfx_path or not sfx_path.exists():
+        return
+    try:
+        sfx_b64 = base64.b64encode(sfx_path.read_bytes()).decode("utf-8")
+        _audio_component_html(sfx_b64, loop=False, hidden_label=f"sfx_now_{sfx_key}_{int(time.time()*1000)}")
+    except Exception:
+        pass
+
+
+def _resolve_bgm_key():
+    stage = st.session_state.get("stage", "intro")
+    current = st.session_state.get("current_mission")
+
+    if stage == "intro":
+        return "intro"
+    if stage == "map":
+        return "map"
+    if stage in ("briefing", "quiz") and current in SCENARIOS:
+        return current
+    if stage == "ending":
+        return "ending"
+    return "map"
+
+
+def render_audio_system():
+    return
 
 def _normalize_log_row(raw: dict) -> dict:
     raw = raw or {}
@@ -1489,34 +1838,53 @@ def _render_employee_lookup_popup_body(name_query: str = ""):
     if exact_cnt >= 2:
         st.warning(f"동명이인 {exact_cnt}명이 확인되었습니다. 반드시 사번을 확인해 선택해주세요.")
 
-    options = list(range(len(candidates)))
-    default_idx = 0
-    if st.session_state.get("employee_selected_record"):
-        sel = st.session_state.get("employee_selected_record") or {}
-        for i, row in candidates.iterrows():
-            if str(row.get("employee_no", "")).strip() == str(sel.get("employee_no", "")).strip() and str(row.get("name", "")).strip() == str(sel.get("name", "")).strip():
-                default_idx = int(i)
-                break
+    # --- 체크박스 선택형(동명이인 UX 개선): 표에서 직접 1명 선택 ---
+    sel_df = show_df.copy()
+    sel_df.insert(0, "선택", False)
 
-    selected_idx = st.selectbox(
-        "본인 정보 선택",
-        options=options,
-        index=default_idx if options else 0,
-        format_func=lambda i: _employee_candidate_label(candidates.iloc[int(i)].to_dict()),
-        key="employee_candidate_select_idx_modal",
+    # 이전 선택 유지
+    prev = st.session_state.get("employee_selected_record") or {}
+    if prev:
+        mask = (
+            candidates["employee_no"].astype(str).str.strip().eq(str(prev.get("employee_no", "")).strip())
+            & candidates["name"].astype(str).str.strip().eq(str(prev.get("name", "")).strip())
+        )
+        if mask.any():
+            sel_df.loc[int(mask[mask].index[0]), "선택"] = True
+
+    edited = st.data_editor(
+        sel_df,
+        hide_index=True,
+        use_container_width=True,
+        disabled=["사번", "이름", "소속 기관"],
+        column_config={
+            "선택": st.column_config.CheckboxColumn("선택", help="본인 행을 1개만 체크하세요."),
+        },
+        key="employee_candidate_editor",
     )
 
-    preview = candidates.iloc[int(selected_idx)].to_dict()
-    p1, p2, p3 = st.columns(3)
-    _render_modal_readonly_field(p1, "사번", str(preview.get("employee_no", "")))
-    _render_modal_readonly_field(p2, "이름", str(preview.get("name", "")))
-    _render_modal_readonly_field(p3, "소속 기관", str(preview.get("organization", "")))
+    checked_idx = list(edited.index[edited["선택"] == True])  # noqa: E712
+    if len(checked_idx) == 0:
+        st.info("본인 정보를 1개 선택(체크)한 뒤 확인 버튼을 눌러주세요.")
+        preview = None
+    elif len(checked_idx) >= 2:
+        st.error("동시에 2개 이상을 선택할 수 없습니다. 1개만 체크해주세요.")
+        preview = None
+    else:
+        preview = candidates.iloc[int(checked_idx[0])].to_dict()
+
+    if preview:
+        p1, p2, p3 = st.columns(3)
+        _render_modal_readonly_field(p1, "사번", str(preview.get("employee_no", "")))
+        _render_modal_readonly_field(p2, "이름", str(preview.get("name", "")))
+        _render_modal_readonly_field(p3, "소속 기관", str(preview.get("organization", "")))
 
     st.markdown("<div class='brief-actions-wrap'></div>", unsafe_allow_html=True)
     c1, c2 = st.columns([1, 1], gap='large')
     with c1:
-        if st.button("✅ 이 정보로 확인", key="employee_modal_confirm_btn", use_container_width=True):
-            row = candidates.iloc[int(selected_idx)].to_dict()
+        btn_disabled = preview is None
+        if st.button("✅ 이 정보로 확인", key="employee_modal_confirm_btn", use_container_width=True, disabled=btn_disabled):
+            row = preview
             st.session_state.employee_selected_record = {
                 "employee_no": str(row.get("employee_no", "")).strip(),
                 "name": str(row.get("name", "")).strip(),
@@ -1535,6 +1903,7 @@ def _render_employee_lookup_popup_body(name_query: str = ""):
             st.rerun()
 
 
+
 if hasattr(st, "dialog"):
     @st.dialog("📋 직원 정보 확인")
     def render_employee_lookup_popup(name_query: str = ""):
@@ -1546,36 +1915,15 @@ else:
 
 
 def append_attempt_log(mission_key: str, q_idx: int, q_type: str, payload: dict):
-    """Append a normalized training attempt row to in-memory history and CSV.
-
-    NOTE:
-    - We intentionally support synthetic events (e.g., END markers) whose mission_key
-      is not part of SCENARIOS. This prevents KeyError and keeps org aggregation stable.
+    """(경량화) 문항별 로그는 파일에 저장하지 않고, 세션 메모리에만 보관합니다.
+    - 운영 요구사항: '1인 1레코드(최종 결과)'만 영구 저장
+    - 안정성: 특수 키(__END__ 등)로 호출돼도 KeyError가 나지 않도록 방어
     """
     user = st.session_state.get("user_info", {})
-
     mission = SCENARIOS.get(mission_key)
     question = None
-
-    mission_title = ""
-    question_text = ""
-    max_score = 0
-
-    if mission and isinstance(q_idx, int) and 0 <= q_idx < len(mission.get("quiz", [])):
-        question = mission["quiz"][q_idx]
-        mission_title = mission.get("title", "")
-        question_text = question.get("question", "")
-        max_score = int(question.get("score", 0) or 0)
-    else:
-        # Synthetic/special events (e.g., "END") or unknown mission keys.
-        mission_title = payload.get("mission_title") or ("교육 종료" if q_type == "END" else str(mission_key))
-        question_text = payload.get("question") or ("교육 종료" if q_type == "END" else "")
-        max_score = int(payload.get("max_score", 0) or 0)
-
-    question_index = (q_idx + 1) if isinstance(q_idx, int) and q_idx >= 0 else ""
-    question_code = (
-        f"{mission_key}_Q{q_idx+1}" if isinstance(q_idx, int) and q_idx >= 0 else str(mission_key)
-    )
+    if mission and isinstance(mission.get("quiz"), list) and 0 <= int(q_idx) < len(mission["quiz"]):
+        question = mission["quiz"][int(q_idx)]
 
     row = _normalize_log_row({
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -1586,30 +1934,20 @@ def append_attempt_log(mission_key: str, q_idx: int, q_type: str, payload: dict)
         "organization": user.get("org", ""),
         "department": "",
         "mission_key": mission_key,
-        "mission_title": mission_title,
-        "question_index": question_index,
-        "question_code": question_code,
+        "mission_title": (mission.get("title") if mission else ""),
+        "question_index": (int(q_idx) + 1) if str(q_idx).isdigit() else "",
+        "question_code": (f"{mission_key}_Q{int(q_idx)+1}" if str(q_idx).isdigit() else ""),
         "question_type": q_type,
-        "question": question_text,
+        "question": (question.get("question") if isinstance(question, dict) else ""),
         "selected_or_text": payload.get("selected_or_text", ""),
         "is_correct": payload.get("is_correct", ""),
         "awarded_score": payload.get("awarded_score", 0),
-        "max_score": max_score,
+        "max_score": (question.get("score", 0) if isinstance(question, dict) else payload.get("max_score", 0)),
         "attempt_no_for_mission": st.session_state.attempt_counts.get(mission_key, 0),
     })
 
+    # 메모리 기록(다운로드/디버그용)
     st.session_state.attempt_history.append(row)
-
-    try:
-        _ensure_log_schema_file()
-        file_exists = LOG_FILE.exists()
-        with open(LOG_FILE, "a", newline="", encoding="utf-8-sig") as f:
-            writer = csv.DictWriter(f, fieldnames=LOG_FIELDNAMES)
-            if not file_exists:
-                writer.writeheader()
-            writer.writerow(row)
-    except Exception as e:
-        st.session_state.log_write_error = str(e)
 
 _TEXT_KEYWORD_SYNONYM_MAP = {
     "서면": ["문서", "서류", "계약서", "발주서", "합의서", "기록"],
@@ -1938,13 +2276,17 @@ def start_training_attempt_session(user_info: dict, attempt_round: int, *, skip_
     st.session_state.map_celebrate_until = 0.0
     st.session_state.map_celebrate_theme = None
     st.session_state.log_write_error = None
+    st.session_state.played_final_fanfare = False
     st.session_state.retry_offer = None
     st.session_state.training_attempt_round = int(max(1, attempt_round))
     st.session_state.training_attempt_id = f"run-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8]}"
+    st.session_state.training_started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     for k, v in keep_keys.items():
         # Avoid overwriting Streamlit widget-bound keys during runtime
-                st.session_state[k] = v
+        if k in ("bgm_enabled", "audio_debug"):
+            continue
+        st.session_state[k] = v
 
     award_participation_points_if_needed()
 
@@ -2022,291 +2364,6 @@ def _load_log_df():
         second_err = str(e2)
 
     return None, f"로그 파일을 읽지 못했습니다. (1차: {first_err}) (2차: {second_err})"
-
-
-# =========================================================
-# 기관(조직) 누적 현황 + 교육 종료(리셋) 유틸
-# - HTML/오디오 없이, 로그 기반으로만 집계
-# =========================================================
-
-def _load_org_targets_optional() -> dict:
-    """Optional org target headcount loader.
-
-    Supported file: org_targets.csv in BASE_DIR
-    Columns: organization/기관/부서/조직 + target/목표/대상/목표인원 등
-    """
-    candidates = ["org_targets.csv", "org_target.csv", "기관별목표인원.csv", "기관목표.csv"]
-    for name in candidates:
-        p = (BASE_DIR / name)
-        if not p.exists():
-            continue
-        try:
-            df = pd.read_csv(p, encoding="utf-8-sig")
-        except Exception:
-            try:
-                df = pd.read_csv(p, encoding="utf-8")
-            except Exception:
-                continue
-
-        if df is None or df.empty:
-            continue
-
-        cols = {c.strip(): c for c in df.columns}
-        org_col = None
-        tgt_col = None
-        for key in ["organization", "기관", "소속", "부서", "조직", "기관명", "부서명"]:
-            if key in cols:
-                org_col = cols[key]
-                break
-        for key in ["target", "목표", "대상", "목표인원", "대상인원", "headcount", "모수"]:
-            if key in cols:
-                tgt_col = cols[key]
-                break
-
-        if not org_col or not tgt_col:
-            continue
-
-        out = {}
-        for _, r in df[[org_col, tgt_col]].dropna().iterrows():
-            org = str(r[org_col]).strip()
-            if not org:
-                continue
-            try:
-                out[org] = int(float(r[tgt_col]))
-            except Exception:
-                continue
-        return out
-    return {}
-
-
-def _participation_rate_score(rate_pct: float) -> float:
-    """Map participation rate(%) to a score(0~10) as requested.
-
-    - >= 100%: 10.0
-    - [98, 100): 8.0 ~ 9.9 (linear)
-    - [96, 98): 6.0 ~ 7.9 (linear)
-    - <= 96: 5.0 ~ 5.9 (linear, min 5.0)
-    """
-    try:
-        r = float(rate_pct)
-    except Exception:
-        return 0.0
-
-    if r >= 100.0:
-        return 10.0
-    if 98.0 <= r < 100.0:
-        # 98 -> 8.0, 99.9 -> 9.9 (cap)
-        v = 8.0 + (r - 98.0) * (1.9 / 2.0)
-        return float(min(9.9, max(8.0, v)))
-    if 96.0 <= r < 98.0:
-        # 96 -> 6.0, 98-ε -> 7.9
-        v = 6.0 + (r - 96.0) * (1.9 / 2.0)
-        return float(min(7.9, max(6.0, v)))
-    # <= 96
-    # 0 -> 5.0, 96 -> 5.9
-    v = 5.0 + (max(0.0, min(96.0, r)) / 96.0) * 0.9
-    return float(min(5.9, max(5.0, v)))
-
-
-def _compute_attempt_totals_from_log(df: pd.DataFrame) -> pd.DataFrame:
-    """Compute per-attempt totals from question-level log rows.
-
-    If an END marker row exists (question_type == 'END'), we use its awarded_score/max_score
-    as total score for the attempt (prevents double counting).
-    Otherwise, we sum awarded_score/max_score across questions.
-    """
-    if df is None or df.empty:
-        return pd.DataFrame(columns=[
-            "training_attempt_id", "employee_no", "name", "organization",
-            "attempt_round", "total_awarded", "total_max", "last_ts"
-        ])
-
-    tmp = _coerce_log_df(df).copy()
-
-    # Normalize types
-    tmp["training_attempt_id"] = tmp.get("training_attempt_id", "").astype(str)
-    tmp["employee_no"] = tmp.get("employee_no", "").astype(str)
-    tmp["name"] = tmp.get("name", "").astype(str)
-    tmp["organization"] = tmp.get("organization", "").astype(str).replace("", "미분류")
-    tmp["attempt_round"] = pd.to_numeric(tmp.get("attempt_round", 1), errors="coerce").fillna(1).astype(int)
-    tmp["awarded_score"] = pd.to_numeric(tmp.get("awarded_score", 0), errors="coerce").fillna(0).astype(int)
-    tmp["max_score"] = pd.to_numeric(tmp.get("max_score", 0), errors="coerce").fillna(0).astype(int)
-
-    # Timestamp parsing (best-effort)
-    if "timestamp" in tmp.columns:
-        ts = pd.to_datetime(tmp["timestamp"], errors="coerce")
-    else:
-        ts = pd.to_datetime(pd.Series([None] * len(tmp)), errors="coerce")
-    tmp["_ts"] = ts
-
-    keys = ["training_attempt_id", "employee_no", "name", "organization", "attempt_round"]
-
-    def agg(g: pd.DataFrame) -> pd.Series:
-        end_rows = g[g.get("question_type", "").astype(str).str.upper() == "END"]
-        if not end_rows.empty:
-            total_aw = int(end_rows["awarded_score"].max())
-            total_mx = int(end_rows["max_score"].max()) if int(end_rows["max_score"].max()) > 0 else int(g["max_score"].sum())
-        else:
-            total_aw = int(g["awarded_score"].sum())
-            total_mx = int(g["max_score"].sum())
-        last_ts = g["_ts"].max()
-        return pd.Series({"total_awarded": total_aw, "total_max": total_mx, "last_ts": last_ts})
-
-    out = tmp.groupby(keys, dropna=False).apply(agg).reset_index()
-    # Fill empty attempt_id for legacy logs
-    out["training_attempt_id"] = out["training_attempt_id"].astype(str).replace("", np.nan)
-    out["training_attempt_id"] = out["training_attempt_id"].fillna("legacy|" + out["organization"].astype(str) + "|" + out["name"].astype(str))
-    return out
-
-
-def _compute_org_snapshot(organization: str) -> dict:
-    """Return org-level snapshot and ranking based on logs."""
-    org = str(organization or "").strip() or "미분류"
-    df, err = _load_log_df()
-    if err or df is None or df.empty:
-        return {
-            "organization": org,
-            "participants": 0,
-            "avg_score_rate": None,
-            "rank": None,
-            "total_orgs": 0,
-            "target": None,
-            "participation_rate": None,
-            "participation_rate_score": None,
-            "leader_top": pd.DataFrame(),
-        }
-
-    attempts = _compute_attempt_totals_from_log(df)
-
-    # Learner id
-    attempts["learner_id"] = attempts["employee_no"].astype(str).where(
-        attempts["employee_no"].astype(str).str.strip() != "",
-        attempts["organization"].astype(str) + "|" + attempts["name"].astype(str)
-    )
-
-    # Use best attempt per learner (max total_awarded)
-    best = attempts.sort_values(["learner_id", "total_awarded", "last_ts"], ascending=[True, False, False])                   .groupby("learner_id", as_index=False).head(1)
-
-    # Org aggregation
-    org_grp = best.groupby("organization", as_index=False).agg(
-        participants=("learner_id", "nunique"),
-        avg_awarded=("total_awarded", "mean"),
-        avg_max=("total_max", "mean"),
-        last_activity=("last_ts", "max"),
-    )
-
-    # Score rate (%) based on TOTAL_SCORE if available, else avg_max
-    denom = float(TOTAL_SCORE) if "TOTAL_SCORE" in globals() and TOTAL_SCORE else None
-    if denom and denom > 0:
-        org_grp["avg_score_rate"] = (org_grp["avg_awarded"] / denom) * 100.0
-    else:
-        org_grp["avg_score_rate"] = np.where(org_grp["avg_max"] > 0, (org_grp["avg_awarded"] / org_grp["avg_max"]) * 100.0, np.nan)
-
-    # Ranking: higher avg_score_rate first, then participants
-    org_grp = org_grp.sort_values(["avg_score_rate", "participants"], ascending=[False, False]).reset_index(drop=True)
-    org_grp["rank"] = np.arange(1, len(org_grp) + 1)
-
-    me = org_grp[org_grp["organization"].astype(str) == org]
-    if me.empty:
-        me_row = {"participants": 0, "avg_score_rate": np.nan, "rank": None}
-    else:
-        me_row = me.iloc[0].to_dict()
-
-    # Optional targets
-    targets = _load_org_targets_optional()
-    target = targets.get(org)
-    part_rate = None
-    part_score = None
-    if target and target > 0:
-        part_rate = (float(me_row.get("participants", 0)) / float(target)) * 100.0
-        part_score = _participation_rate_score(part_rate)
-
-    # leader top 5
-    leader = org_grp[["rank", "organization", "participants", "avg_score_rate", "last_activity"]].head(5).copy()
-    if not leader.empty:
-        leader["avg_score_rate"] = leader["avg_score_rate"].round(1)
-        leader["last_activity"] = leader["last_activity"].astype(str).str.replace("T", " ").str.slice(0, 19)
-
-    return {
-        "organization": org,
-        "participants": int(me_row.get("participants", 0) or 0),
-        "avg_score_rate": None if pd.isna(me_row.get("avg_score_rate")) else float(me_row.get("avg_score_rate")),
-        "rank": None if me_row.get("rank") in [None, ""] else int(me_row.get("rank")),
-        "total_orgs": int(len(org_grp)),
-        "target": int(target) if target is not None else None,
-        "participation_rate": None if part_rate is None else float(part_rate),
-        "participation_rate_score": None if part_score is None else float(part_score),
-        "leader_top": leader,
-    }
-
-
-def _append_training_end_log_row(total_score: int, total_max: int) -> None:
-    """Append a synthetic END row so org stats can reflect the final score reliably."""
-    u = st.session_state.get("user_info", {}) or {}
-    append_attempt_log(
-        mission_key="__END__",
-        q_idx=9999,
-        q_type="END",
-        payload={
-            "question": "TRAINING_END",
-            "selected_or_text": "",
-            "is_correct": "Y",
-            "awarded_score": int(total_score or 0),
-            "max_score": int(total_max or 0),
-            "employee_no": str(u.get("employee_no", "")).strip(),
-            "name": str(u.get("name", "")).strip(),
-            "organization": str(u.get("org", "")).strip() or "미분류",
-        },
-    )
-
-
-if hasattr(st, "dialog"):
-    @st.dialog("🧾 교육 리뷰")
-    def _render_training_review_dialog(user_name: str, org_snapshot: dict, my_score: int, my_max: int, my_grade: str):
-        st.subheader("개인 결과")
-        c1, c2, c3 = st.columns(3)
-        c1.metric("내 점수", f"{my_score} / {my_max}")
-        c2.metric("등급", my_grade)
-        c3.metric("소속", org_snapshot.get("organization", "미분류") or "미분류")
-
-        st.divider()
-        st.subheader("소속 기관 현황(누적)")
-        oc1, oc2, oc3 = st.columns(3)
-        oc1.metric("참여자(명)", f"{org_snapshot.get('participants', 0)}")
-        avg_rate = org_snapshot.get("avg_score_rate")
-        oc2.metric("기관 평균점수(%)", "-" if avg_rate is None else f"{avg_rate:.1f}%")
-        rank = org_snapshot.get("rank")
-        total_orgs = org_snapshot.get("total_orgs", 0)
-        oc3.metric("기관 순위", "-" if rank is None else f"{rank} / {total_orgs}")
-
-        # Optional participation targets
-        if org_snapshot.get("target") is not None:
-            st.divider()
-            tc1, tc2, tc3 = st.columns(3)
-            tc1.metric("목표 인원(명)", f"{org_snapshot.get('target')}")
-            pr = org_snapshot.get("participation_rate")
-            tc2.metric("참여율(%)", "-" if pr is None else f"{pr:.1f}%")
-            prs = org_snapshot.get("participation_rate_score")
-            tc3.metric("참여율 점수(10점 만점)", "-" if prs is None else f"{prs:.1f}")
-
-        leader = org_snapshot.get("leader_top")
-        if isinstance(leader, pd.DataFrame) and not leader.empty:
-            st.divider()
-            st.subheader("상위 기관 (Top 5)")
-            st.table(leader)
-
-        st.divider()
-        end_c1, end_c2 = st.columns([1, 1])
-        with end_c1:
-            if st.button("✅ 교육 종료(정보 초기화)", use_container_width=True, key="end_training_in_dialog"):
-                # Ensure the END row is written before reset
-                _append_training_end_log_row(my_score, my_max)
-                reset_game()
-        with end_c2:
-            if st.button("닫기", use_container_width=True, key="close_review_dialog"):
-                st.session_state["review_dialog_open"] = False
-                st.rerun()
-
 
 
 def _build_participant_snapshot(df: pd.DataFrame):
@@ -2507,49 +2564,31 @@ def render_admin_page():
             st.session_state.admin_authed = False
             st.rerun()
 
-    tab2, tab3 = st.tabs(["🧠 문항 통계", "📄 로그 관리"])
+    tab_org, tab_result = st.tabs(["🏢 기관 전광판", "📄 최종 결과 로그(1인 1레코드)"])
 
-    with tab2:
-        try:
-            render_admin_question_stats()
-        except Exception as e:
-            st.error(f"문항 통계 탭 오류: {e}")
-            if st.button("🛠 로그 스키마 자동 복구 시도", key="repair_log_from_tab2", use_container_width=True):
-                try:
-                    _ensure_log_schema_file()
-                    st.success("로그 스키마 복구를 시도했습니다. 다시 열어보세요.")
-                except Exception as ee:
-                    st.error(f"복구 실패: {ee}")
+    with tab_org:
+        render_org_electronic_board(st)
 
-    with tab3:
+    with tab_result:
         try:
-            df, err = _load_log_df()
-            if err:
-                st.info(err)
+            df = load_training_results_df()
+            if df.empty:
+                st.info("아직 최종 결과 로그가 없습니다. (참가자가 '교육 종료'를 누르면 1건이 생성됩니다.)")
             else:
-                st.write(f"누적 로그 건수: {len(df):,}건")
-                if "organization" in df.columns:
-                    st.write("기관별 로그 건수")
-                    cnt = df["organization"].fillna("미분류").value_counts().reset_index()
-                    cnt.columns = ["기관", "로그 건수"]
-                    safe_dataframe(cnt, use_container_width=True)
-                safe_dataframe(df.tail(200), use_container_width=True, height=320)
+                st.write(f"누적 최종 결과: {len(df):,}건 (중복 포함 가능 · 사번 기준 정제는 별도)")
+                safe_dataframe(df.tail(200), use_container_width=True, height=360)
                 st.download_button(
-                    "📥 전체 로그 CSV 다운로드",
+                    "📥 최종 결과 CSV 다운로드",
                     data=df.to_csv(index=False).encode("utf-8-sig"),
-                    file_name=f"compliance_training_full_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    file_name=f"training_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                     mime="text/csv",
                     use_container_width=True,
                 )
-            st.caption("로그 파일이 과거 버전과 섞여 있어도 자동 복구를 시도합니다.")
-            if st.button("🛠 로그 스키마 재정렬(복구)", key="repair_log_from_tab3", use_container_width=True):
-                try:
-                    _ensure_log_schema_file()
-                    st.success("로그 스키마를 현재 버전 형식으로 재정렬했습니다.")
-                except Exception as ee:
-                    st.error(f"복구 실패: {ee}")
+            if st.session_state.get("result_write_error"):
+                st.warning(f"참고: 최종 결과 로그 저장 실패({st.session_state.result_write_error}) — 앱 동작에는 문제 없습니다.")
         except Exception as e:
-            st.error(f"로그 관리 탭 오류: {e}")
+            st.error(f"최종 결과 로그 탭 오류: {e}")
+
 
 
 def render_admin_question_stats():
@@ -2895,6 +2934,8 @@ def render_mcq_question(m_key: str, q_idx: int, q_data: dict):
             "wrong_extra": q_data["wrong_extra"],
         }
         submissions[q_idx] = result
+
+        queue_sfx("correct" if is_correct else "wrong")
         try:
             st.toast("정답입니다!" if is_correct else "다시 생각해보세요", icon="✨" if is_correct else "⚠️")
         except Exception:
@@ -3038,6 +3079,7 @@ def render_text_question(m_key: str, q_idx: int, q_data: dict):
 
         ratio = (eval_res["awarded_score"] / q_data["score"]) if q_data["score"] else 0
         is_good = ratio >= TEXT_CORRECT_THRESHOLD
+        queue_sfx("correct" if is_good else "wrong")
         try:
             st.toast("주관식 답안이 잘 작성되었어요!" if is_good else "보완 포인트를 확인해보세요", icon="✨" if is_good else "⚠️")
         except Exception:
@@ -3187,7 +3229,6 @@ if pending:
         skip_to_stage=str(pending.get("skip_to_stage", "map") or "map"),
     )
     st.rerun()
-
 with st.sidebar:
     st.markdown("---")
     st.caption("관리자")
@@ -3198,6 +3239,9 @@ with st.sidebar:
         if st.button("🔓 관리자 로그아웃", use_container_width=True):
             st.session_state.admin_authed = False
             st.rerun()
+
+    # 기관 전광판(항상 노출)
+    render_org_electronic_board(st)
 
 try:
     if st.session_state.stage == "intro":
@@ -3425,12 +3469,62 @@ try:
         wrong_like = sum(1 for r in st.session_state.attempt_history if str(r.get("is_correct", "")) in ["N", "PARTIAL"])
 
         st.balloons()
+
         st.title("🏆 Guardian Training Complete")
         st.success(f"{user_name} 가디언님, 모든 테마를 정복했습니다!")
 
         _ending_img = get_ending_image()
         if _ending_img:
             st.image(str(_ending_img), use_container_width=True)
+
+        # --- 최종 리뷰/종료(1인 1레코드 저장 + 정보 초기화) ---
+        if st.session_state.get("show_review_popup", False):
+            st.session_state.show_review_popup = False
+            if hasattr(st, "dialog"):
+                @st.dialog("🧾 교육 리뷰")
+                def _review_dialog():
+                    _render_review_contents(user_name, user_org, score, TOTAL_SCORE)
+                _review_dialog()
+            else:
+                _render_review_contents(user_name, user_org, score, TOTAL_SCORE)
+
+        r1, r2 = st.columns([1,1], gap="large")
+        with r1:
+            if st.button("🧾 리뷰 보기", use_container_width=True):
+                st.session_state.show_review_popup = True
+                st.rerun()
+        with r2:
+            if st.button("✅ 교육 종료(정보 초기화)", use_container_width=True):
+                # 최종 결과 1건 저장
+                ended_at = datetime.now()
+                started_at_str = st.session_state.get("training_started_at")
+                try:
+                    started_at_dt = datetime.strptime(started_at_str, "%Y-%m-%d %H:%M:%S") if started_at_str else ended_at
+                except Exception:
+                    started_at_dt = ended_at
+                duration = int(max(0, (ended_at - started_at_dt).total_seconds()))
+                theme_scores_json = json.dumps(st.session_state.get("mission_scores", {}), ensure_ascii=False)
+
+                append_training_result_row({
+                    "employee_no": st.session_state.user_info.get("employee_no",""),
+                    "name": st.session_state.user_info.get("name",""),
+                    "organization": st.session_state.user_info.get("org",""),
+                    "started_at": started_at_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                    "ended_at": ended_at.strftime("%Y-%m-%d %H:%M:%S"),
+                    "duration_seconds": duration,
+                    "final_score": score,
+                    "final_score_max": TOTAL_SCORE,
+                    "final_score_rate": round((score / TOTAL_SCORE) * 100.0, 2) if TOTAL_SCORE else 0,
+                    "grade": grade,
+                    "attempt_round": st.session_state.get("training_attempt_round", 1),
+                    "training_attempt_id": st.session_state.get("training_attempt_id",""),
+                    "theme_scores_json": theme_scores_json,
+                })
+
+                # 사용자 정보/진행 초기화 후 첫 화면으로
+                reset_game()
+                st.session_state.stage = "intro"
+                st.rerun()
 
         st.markdown("<div class='brief-actions-wrap'></div>", unsafe_allow_html=True)
         c1, c2 = st.columns([1, 1], gap='large')
@@ -3492,28 +3586,63 @@ try:
 
         st.info("관리자용 문항 통계/로그 관리는 좌측 사이드바의 ‘관리자 대시보드’에서 확인할 수 있습니다.")
 
-        # -----------------------------------------------------
-        # 교육 리뷰(팝업) + 교육 종료(정보 초기화 후 첫 화면)
-        # -----------------------------------------------------
-        if "review_dialog_open" not in st.session_state:
-            st.session_state["review_dialog_open"] = False
+        # --- 최종 리뷰/종료(1인 1레코드 저장 + 정보 초기화) ---
+        if st.session_state.get("show_review_popup", False):
+            st.session_state.show_review_popup = False
+            if hasattr(st, "dialog"):
+                @st.dialog("🧾 교육 리뷰")
+                def _review_dialog():
+                    _render_review_contents(user_name, user_org, score, TOTAL_SCORE)
+                _review_dialog()
+            else:
+                _render_review_contents(user_name, user_org, score, TOTAL_SCORE)
 
-        user_name = st.session_state.user_info.get("name", "가디언")
-        user_org = st.session_state.user_info.get("org", "") or "미분류"
-        org_snapshot = _compute_org_snapshot(user_org)
-
-        a1, a2, a3 = st.columns([1, 1, 1], gap="large")
-        with a1:
-            if st.button("🧾 리뷰 보기", use_container_width=True, key="open_review_dialog_btn"):
-                st.session_state["review_dialog_open"] = True
+        r1, r2 = st.columns([1,1], gap="large")
+        with r1:
+            if st.button("🧾 리뷰 보기", use_container_width=True):
+                st.session_state.show_review_popup = True
                 st.rerun()
-        with a2:
-            if st.button("✅ 교육 종료", use_container_width=True, key="end_training_btn"):
-                # Ensure the END marker row is written before reset
-                _append_training_end_log_row(score, TOTAL_SCORE)
+        with r2:
+            if st.button("✅ 교육 종료(정보 초기화)", use_container_width=True):
+                # 최종 결과 1건 저장
+                ended_at = datetime.now()
+                started_at_str = st.session_state.get("training_started_at")
+                try:
+                    started_at_dt = datetime.strptime(started_at_str, "%Y-%m-%d %H:%M:%S") if started_at_str else ended_at
+                except Exception:
+                    started_at_dt = ended_at
+                duration = int(max(0, (ended_at - started_at_dt).total_seconds()))
+                theme_scores_json = json.dumps(st.session_state.get("mission_scores", {}), ensure_ascii=False)
+
+                append_training_result_row({
+                    "employee_no": st.session_state.user_info.get("employee_no",""),
+                    "name": st.session_state.user_info.get("name",""),
+                    "organization": st.session_state.user_info.get("org",""),
+                    "started_at": started_at_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                    "ended_at": ended_at.strftime("%Y-%m-%d %H:%M:%S"),
+                    "duration_seconds": duration,
+                    "final_score": score,
+                    "final_score_max": TOTAL_SCORE,
+                    "final_score_rate": round((score / TOTAL_SCORE) * 100.0, 2) if TOTAL_SCORE else 0,
+                    "grade": grade,
+                    "attempt_round": st.session_state.get("training_attempt_round", 1),
+                    "training_attempt_id": st.session_state.get("training_attempt_id",""),
+                    "theme_scores_json": theme_scores_json,
+                })
+
+                # 사용자 정보/진행 초기화 후 첫 화면으로
                 reset_game()
-        with a3:
-            if st.button("🔄 다시 도전", use_container_width=True, key="retry_from_ending_btn"):
+                st.session_state.stage = "intro"
+                st.rerun()
+
+        st.markdown("<div class='brief-actions-wrap'></div>", unsafe_allow_html=True)
+        c1, c2 = st.columns([1, 1], gap='large')
+        with c1:
+            if st.button("🗺️ 지도 다시 보기", use_container_width=True):
+                st.session_state.stage = "map"
+                st.rerun()
+        with c2:
+            if st.button("🔄 다시 도전", use_container_width=True):
                 u = st.session_state.get("user_info", {}) or {}
                 emp_no = str(u.get("employee_no", "")).strip()
                 emp_name = str(u.get("name", "")).strip()
@@ -3529,16 +3658,6 @@ try:
                     else:
                         _set_retry_offer({"employee_no": emp_no, "name": emp_name, "org": emp_org}, completed_attempts, context="ending")
                         st.rerun()
-
-        # Open review dialog (if supported)
-        if st.session_state.get("review_dialog_open") and hasattr(st, "dialog"):
-            _render_training_review_dialog(
-                user_name=user_name,
-                org_snapshot=org_snapshot,
-                my_score=score,
-                my_max=TOTAL_SCORE,
-                my_grade=grade,
-            )
 
         render_retry_offer_box("ending")
     else:
