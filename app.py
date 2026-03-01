@@ -2463,7 +2463,7 @@ def render_org_dashboard_main(user_org: str | None, emp_df: pd.DataFrame | None)
     org_df["participation_rate_score"] = org_df["participation_rate"].apply(_participation_rate_score)
 
     # 3) Ranking
- (avg score rate first)
+    # (avg_score_rate first)  # prefer normalized percent column if available
     rank_key = "avg_score_rate" if "avg_score_rate" in org_df.columns else "avg_score"
     org_df = org_df.sort_values(
         [rank_key, "participants", "organization"],
@@ -2499,28 +2499,28 @@ def render_org_dashboard_main(user_org: str | None, emp_df: pd.DataFrame | None)
 
     if my_row:
         st.markdown("#### ✅ 내 기관 현황")
-                c1, c2, c3, c4, c5 = st.columns([1, 1, 1, 1, 1])
+        c1, c2, c3, c4, c5 = st.columns([1, 1, 1, 1, 1])
 
-                participants = int(my_row.get("participants", 0) or 0)
-                target = my_row.get("target", np.nan)
-                part_label = f"{participants}명" if pd.isna(target) else f"{participants}/{int(target)}명"
+        participants = int(my_row.get("participants", 0) or 0)
+        target = my_row.get("target", np.nan)
+        part_label = f"{participants}명" if pd.isna(target) else f"{participants}/{int(target)}명"
 
-                with c1:
-                    st.metric("참여 인원", part_label)
-                with c2:
-                    pr = my_row.get("participation_rate", np.nan)
-                    st.metric("참여율", "-" if pd.isna(pr) else f"{float(pr):.1f}%")
-                with c3:
-                    prs = my_row.get("participation_rate_score", np.nan)
-                    st.metric("참여율 점수", "-" if pd.isna(prs) else f"{float(prs):.1f}점")
-                with c4:
-                    asr = my_row.get("avg_score_rate", np.nan)
-                    if pd.isna(asr):
-                        st.metric("평균 점수", f"{float(my_row.get('avg_score', 0) or 0):.1f}")
-                    else:
-                        st.metric("평균 점수(%)", f"{float(asr):.1f}%")
-                with c5:
-                    st.metric("기관 순위", f"{int(my_row.get('rank', 0) or 0)}위")
+        with c1:
+            st.metric("참여 인원", part_label)
+        with c2:
+            pr = my_row.get("participation_rate", np.nan)
+            st.metric("참여율", "-" if pd.isna(pr) else f"{float(pr):.1f}%")
+        with c3:
+            prs = my_row.get("participation_rate_score", np.nan)
+            st.metric("참여율 점수", "-" if pd.isna(prs) else f"{float(prs):.1f}점")
+        with c4:
+            asr = my_row.get("avg_score_rate", np.nan)
+            if pd.isna(asr):
+                st.metric("평균 점수", f"{float(my_row.get('avg_score', 0) or 0):.1f}")
+            else:
+                st.metric("평균 점수(%)", f"{float(asr):.1f}%")
+        with c5:
+            st.metric("기관 순위", f"{int(my_row.get('rank', 0) or 0)}위")
 
         st.caption("※ 순위는 평균 점수(%) 기준이며, 동점 시 참여자 수가 많은 기관이 우선됩니다.")
     else:
