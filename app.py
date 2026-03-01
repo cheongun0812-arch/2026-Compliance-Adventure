@@ -1,17 +1,20 @@
 import streamlit as st
-import streamlit.components.v1 as components
 from datetime import datetime
 from pathlib import Path
 import csv
 import io
 import time
 import uuid
+import base64
 import pandas as pd
 import numpy as np
 try:
     from streamlit.errors import StreamlitInvalidHeightError
 except Exception:
     StreamlitInvalidHeightError = Exception
+import streamlit.components.v1 as components
+
+
 def scroll_to_top(delay_ms: int = 0) -> None:
     """Best-effort scroll-to-top.
 
@@ -557,6 +560,7 @@ def safe_bar_chart(data, **kwargs):
 
 # =========================================================
 # 2) 파일 경로 / 에셋
+#    (이미지/사운드 모두 app.py와 같은 폴더에 있다고 가정)
 # =========================================================
 BASE_DIR = Path(__file__).parent if "__file__" in globals() else Path.cwd()
 ASSET_DIR = BASE_DIR
@@ -581,45 +585,6 @@ LOG_FIELDNAMES = [
     "max_score",
     "attempt_no_for_mission",
 ]
-
-
-def has_already_completed_training(employee_no: str) -> bool:
-    """중복 참여 방지용: 로그 파일에 해당 사번이 모든 미션 키를 1회 이상 남겼으면 '완료'로 간주.
-    - 완전 정확한 '수료' 판정(예: 마지막 화면 도달)을 위해서는 별도 결과 테이블이 최적이지만,
-      현재 구조(문항 단위 로그)에서 운영 안정성을 최우선으로 하는 휴리스틱입니다.
-    """
-    employee_no = str(employee_no or "").strip()
-    if not employee_no:
-        return False
-    if not LOG_FILE.exists():
-        return False
-
-    try:
-        import pandas as _pd
-        df = _pd.read_csv(LOG_FILE, encoding="utf-8-sig")
-    except Exception:
-        return False
-
-    if df is None or df.empty:
-        return False
-    if "employee_no" not in df.columns or "mission_key" not in df.columns:
-        return False
-
-    try:
-        user_df = df[df["employee_no"].astype(str).str.strip() == employee_no]
-    except Exception:
-        return False
-
-    if user_df.empty:
-        return False
-
-    # 완료 판정: 모든 시나리오(테마)의 mission_key가 로그에 존재하면 완료로 간주
-    try:
-        completed_keys = set(user_df["mission_key"].dropna().astype(str).str.strip().tolist())
-        required_keys = set(SCENARIOS.keys())
-        return required_keys.issubset(completed_keys)
-    except Exception:
-        return False
 
 MAP_STAGE_IMAGES = {
     0: ASSET_DIR / "world_map_0.png",
@@ -659,8 +624,6 @@ EMPLOYEE_COL_ALIASES = {
     "name": ["name", "employee_name", "fullname", "성명", "이름", "직원명", "사원명"],
     "organization": ["organization", "org", "department", "dept", "소속", "소속기관", "기관", "조직", "본부", "부서"],
 }
-
-# 전체 과정 공통 BGM (권장 파일명)
 
 # 구버전 단계별 파일명도 fallback 지원 (기존 운영 호환)
 
@@ -864,8 +827,8 @@ def init_state():
         "map_celebrate_theme": None,
         "last_cleared_mission": None,
         "log_write_error": None,
-        "played_final_fanfare": False,
         "admin_authed": False,
+        "audio_debug": False,
         "employee_lookup_candidates": [],
         "employee_selected_record": None,
         "employee_lookup_modal_open": False,
@@ -967,6 +930,7 @@ def mark_theme_complete_if_ready(m_key: str):
             st.session_state.map_celebrate_theme = m_key
             st.session_state.map_celebrate_until = float(time.time()) + 5.0
 # =========================================================
+# 5) 유틸 함수 (이미지 / 사운드 / 로그 / 평가)
 # =========================================================
 def get_current_map_image():
     stage_idx = min(len(st.session_state.get("completed", [])), 3)
@@ -1029,13 +993,9 @@ from typing import Optional
 
 
 
-
-
-
-
-
-
-
+def render_audio_status_hint():
+    # 패널 제거 (최종본에서 사용하지 않음)
+    return
 
 def _normalize_log_row(raw: dict) -> dict:
     raw = raw or {}
@@ -1509,45 +1469,30 @@ def _render_employee_lookup_popup_body(name_query: str = ""):
     show_df = candidates[["employee_no", "name", "organization"]].copy()
     show_df.columns = ["사번", "이름", "소속 기관"]
 
+    safe_dataframe(show_df, use_container_width=True, height=min(320, 90 + len(show_df) * 35))
 
     exact_name = (name_query or "").strip()
     exact_cnt = int((candidates["name"].astype(str).str.strip() == exact_name).sum()) if exact_name else 0
     if exact_cnt >= 2:
         st.warning(f"동명이인 {exact_cnt}명이 확인되었습니다. 반드시 사번을 확인해 선택해주세요.")
 
-
-    # ✅ 동명이인 포함: 콤보박스 대신 '체크박스 1개 선택' 방식으로 단순화
-    show_editor = show_df.copy()
-    show_editor.insert(0, "선택", False)
-
-    # 이전 선택이 있으면 해당 행을 기본 선택
-    prev = st.session_state.get("employee_selected_record") or {}
-    if prev:
+    options = list(range(len(candidates)))
+    default_idx = 0
+    if st.session_state.get("employee_selected_record"):
+        sel = st.session_state.get("employee_selected_record") or {}
         for i, row in candidates.iterrows():
-            if str(row.get("employee_no", "")).strip() == str(prev.get("employee_no", "")).strip() and str(row.get("name", "")).strip() == str(prev.get("name", "")).strip():
-                try:
-                    show_editor.loc[int(i), "선택"] = True
-                except Exception:
-                    pass
+            if str(row.get("employee_no", "")).strip() == str(sel.get("employee_no", "")).strip() and str(row.get("name", "")).strip() == str(sel.get("name", "")).strip():
+                default_idx = int(i)
                 break
 
-    edited = st.data_editor(
-        show_editor,
-        hide_index=True,
-        use_container_width=True,
-        disabled=["사번", "이름", "소속 기관"],
-        column_config={
-            "선택": st.column_config.CheckboxColumn("선택", help="본인 정보 1개만 선택하세요."),
-        },
-        key="employee_confirm_table",
+    selected_idx = st.selectbox(
+        "본인 정보 선택",
+        options=options,
+        index=default_idx if options else 0,
+        format_func=lambda i: _employee_candidate_label(candidates.iloc[int(i)].to_dict()),
+        key="employee_candidate_select_idx_modal",
     )
 
-    selected_indices = list(edited.index[edited["선택"] == True])  # noqa: E712
-
-    # 미리보기: 선택 1개면 그 행, 아니면 첫 번째 행
-    selected_idx = int(selected_indices[0]) if len(selected_indices) == 1 else 0
-
-    # 2개 이상 선택은 확인 버튼 클릭 시 차단 (UX는 유지하면서 로직 단순화)
     preview = candidates.iloc[int(selected_idx)].to_dict()
     p1, p2, p3 = st.columns(3)
     _render_modal_readonly_field(p1, "사번", str(preview.get("employee_no", "")))
@@ -1558,20 +1503,7 @@ def _render_employee_lookup_popup_body(name_query: str = ""):
     c1, c2 = st.columns([1, 1], gap='large')
     with c1:
         if st.button("✅ 이 정보로 확인", key="employee_modal_confirm_btn", use_container_width=True):
-            if len(selected_indices) != 1:
-                st.warning("본인 정보를 **1개만** 체크(선택)한 후 확인을 눌러주세요.")
-                return
             row = candidates.iloc[int(selected_idx)].to_dict()
-            emp_no = str(row.get("employee_no", "")).strip()
-            emp_name = str(row.get("name", "")).strip() or "참가자"
-            if has_already_completed_training(emp_no):
-                st.info(f"ℹ️ {emp_name}님은 이미 2026 Compliance Adventure를 완료했습니다.\n\n{emp_name} has already completed the 2026 Compliance Adventure.")
-                try:
-                    st.toast("이미 수료한 참가자입니다.", icon="ℹ️")
-                except Exception:
-                    pass
-                return
-
             st.session_state.employee_selected_record = {
                 "employee_no": str(row.get("employee_no", "")).strip(),
                 "name": str(row.get("name", "")).strip(),
@@ -1966,14 +1898,15 @@ def start_training_attempt_session(user_info: dict, attempt_round: int, *, skip_
     st.session_state.map_celebrate_until = 0.0
     st.session_state.map_celebrate_theme = None
     st.session_state.log_write_error = None
-    st.session_state.played_final_fanfare = False
     st.session_state.retry_offer = None
     st.session_state.training_attempt_round = int(max(1, attempt_round))
     st.session_state.training_attempt_id = f"run-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8]}"
 
     for k, v in keep_keys.items():
         # Avoid overwriting Streamlit widget-bound keys during runtime
-                st.session_state[k] = v
+        if k in ("audio_removed_flag", "audio_debug"):
+            continue
+        st.session_state[k] = v
 
     award_participation_points_if_needed()
 
@@ -3012,44 +2945,24 @@ try:
             if st.button("📋 조회 결과 팝업 다시 열기", use_container_width=True, key="reopen_employee_popup"):
                 st.session_state.employee_lookup_modal_open = True
                 st.rerun()
+
         selected_emp = st.session_state.get("employee_selected_record")
         if selected_emp:
-            # 방금 팝업에서 '이 정보로 확인'을 눌렀다면, 자동으로 시작 섹션으로 스크롤/포커스
-            # (HTML 노출을 방지하기 위해 unsafe_allow_html 없이, hidden components.html로만 스크롤 처리)
+            st.markdown("<div id='start-adventure-anchor'></div>", unsafe_allow_html=True)
+
+            # 방금 팝업에서 '이 정보로 확인'을 눌렀다면, 아래 시작 영역으로 자동 스크롤
             if st.session_state.get('just_confirmed_employee', False):
                 st.session_state.just_confirmed_employee = False
                 try:
                     components.html(
-                        r'''
-<script>
-(function () {
-  function findStartButton(doc) {
-    try {
-      const buttons = Array.from(doc.querySelectorAll('button'));
-      return buttons.find(b => (b.innerText || '').includes('모험 시작하기') ||
-                               (b.innerText || '').toLowerCase().includes('start adventure'));
-    } catch (e) { return null; }
-  }
-
-  function go() {
-    try { window.scrollTo(0, 0); } catch (e) {}
-    try { if (window.parent) window.parent.scrollTo(0, 0); } catch (e) {}
-    try { if (window.top) window.top.scrollTo(0, 0); } catch (e) {}
-
-    const doc = document;
-    const parentDoc = (window.parent && window.parent.document) ? window.parent.document : null;
-
-    const btn = findStartButton(doc) || (parentDoc ? findStartButton(parentDoc) : null);
-    if (btn && btn.scrollIntoView) {
-      btn.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }
-  }
-
-  // Streamlit rerun 후 DOM 렌더링 완료까지 짧게 대기
-  setTimeout(go, 80);
-})();
-</script>
-''',
+                        """
+                        <script>
+                          (function() {
+                            const el = window.parent.document.getElementById('start-adventure-anchor');
+                            if (el) { el.scrollIntoView({behavior:'smooth', block:'start'}); }
+                          })();
+                        </script>
+                        """,
                         height=0,
                     )
                 except Exception:
@@ -3188,9 +3101,6 @@ try:
         wrong_like = sum(1 for r in st.session_state.attempt_history if str(r.get("is_correct", "")) in ["N", "PARTIAL"])
 
         st.balloons()
-        if not st.session_state.get("played_final_fanfare", False):
-            st.session_state.played_final_fanfare = True
-
         st.title("🏆 Guardian Training Complete")
         st.success(f"{user_name} 가디언님, 모든 테마를 정복했습니다!")
 
