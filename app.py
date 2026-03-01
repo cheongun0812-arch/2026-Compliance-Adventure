@@ -344,37 +344,6 @@ div.stButton > button:first-child:hover {
 
 
 
-/* 기관별 누적 점수 미니 카드 (인트로) */
-.org-mini-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-    gap: 10px;
-    margin: 8px 0 4px 0;
-}
-.org-mini-card {
-    background: linear-gradient(135deg, #121A26, #0F1622);
-    border: 1px solid #263348;
-    border-radius: 12px;
-    padding: 10px 12px;
-}
-.org-mini-title {
-    color: #CFE0FF;
-    font-size: 0.86rem;
-    font-weight: 700;
-    margin-bottom: 4px;
-    line-height: 1.25;
-}
-.org-mini-score {
-    color: #F7FBFF;
-    font-size: 1.15rem;
-    font-weight: 800;
-}
-.org-mini-meta {
-    color: #AFC2E4;
-    font-size: 0.78rem;
-    margin-top: 2px;
-}
-
 /* 다이얼로그(직원 정보 확인) 가독성 보정 */
 div[data-testid="stDialog"] [role="dialog"] {
     background: #FFFFFF !important;
@@ -2291,277 +2260,301 @@ def _build_participant_snapshot(df: pd.DataFrame):
     }
 
 
-def render_intro_org_cumulative_board():
-    """메인 화면 전용: 기관별 누적 점수/참여 현황 대시보드 (참여자용 요약 뷰)."""
-    st.markdown("### 🏢 기관별 누적 점수 및 참여 현황")
 
+
+
+
+# =========================
+# Organization targets & scoring (NO HTML)
+# =========================
+ORG_TARGETS_PATH = Path(os.environ.get("ORG_TARGETS_PATH", "org_targets.csv"))
+
+def _normalize_org_name(x: object) -> str:
+    s = "" if x is None else str(x)
+    s = s.strip()
+    return s if s else "미분류"
+
+def _load_org_targets() -> pd.DataFrame:
+    """Load per-organization target headcount for participation-rate computation.
+
+    Expected columns (case-insensitive / Korean aliases supported):
+      - organization / 기관 / 소속 / 부서
+      - target / 목표 / 대상 / 목표인원 / 대상인원
+
+    Source:
+      - CSV at ORG_TARGETS_PATH (default: ./org_targets.csv)
+    """
+    if not ORG_TARGETS_PATH.exists():
+        return pd.DataFrame(columns=["organization", "target"])
+    try:
+        df = pd.read_csv(ORG_TARGETS_PATH)
+    except Exception:
+        # last resort: try utf-8-sig / cp949
+        for enc in ("utf-8-sig", "cp949"):
+            try:
+                df = pd.read_csv(ORG_TARGETS_PATH, encoding=enc)
+                break
+            except Exception:
+                df = None
+        if df is None:
+            return pd.DataFrame(columns=["organization", "target"])
+
+    if df is None or df.empty:
+        return pd.DataFrame(columns=["organization", "target"])
+
+    # Find columns
+    cols = {c: str(c).strip().lower() for c in df.columns}
+    org_candidates = [c for c,v in cols.items() if v in ("organization","org","기관","소속","부서","조직","기관명","소속기관")]
+    tgt_candidates = [c for c,v in cols.items() if v in ("target","targets","목표","대상","목표인원","대상인원","목표인원수","대상자수","target_headcount","headcount")]
+
+    org_col = org_candidates[0] if org_candidates else None
+    tgt_col = tgt_candidates[0] if tgt_candidates else None
+    if org_col is None or tgt_col is None:
+        # try fuzzy match
+        for c in df.columns:
+            lc=str(c).lower()
+            if org_col is None and any(k in lc for k in ["org","기관","소속","부서","조직"]):
+                org_col=c
+            if tgt_col is None and any(k in lc for k in ["target","목표","대상","인원","headcount"]):
+                tgt_col=c
+        if org_col is None or tgt_col is None:
+            return pd.DataFrame(columns=["organization", "target"])
+
+    out = df[[org_col, tgt_col]].copy()
+    out.columns = ["organization", "target"]
+    out["organization"] = out["organization"].apply(_normalize_org_name)
+    out["target"] = pd.to_numeric(out["target"], errors="coerce").fillna(0).astype(int)
+    out = out.groupby("organization", as_index=False).agg(target=("target","max"))
+    return out
+
+def _participation_rate_score(rate_pct: float | int | None) -> float | None:
+    """Map participation rate(%) -> score, per user rubric.
+
+    Rules:
+      - 100% (or above): 10.0
+      - 98.0% ~ 99.9% : 8.0 ~ 9.9 (linear)
+      - 96.0% ~ <98.0%: 6.0 ~ 7.9 (linear)
+      - <=96.0%        : 5.0 ~ 5.9 (linear, 0% -> 5.0, 96% -> 5.9)
+    """
+    if rate_pct is None or (isinstance(rate_pct, float) and np.isnan(rate_pct)):
+        return None
+    try:
+        r = float(rate_pct)
+    except Exception:
+        return None
+    if r >= 100.0:
+        return 10.0
+    if r >= 98.0:
+        # 98 -> 8.0, 99.9 -> 9.9  (score = rate - 90)
+        return round(max(8.0, min(9.9, r - 90.0)), 1)
+    if r >= 96.0:
+        # 96 -> 6.0, 98 -> 7.9 (linear)
+        score = 6.0 + (r - 96.0) * (1.9 / 2.0)
+        return round(max(6.0, min(7.9, score)), 1)
+    # <= 96
+    score = 5.0 + max(0.0, min(96.0, r)) * (0.9 / 96.0)
+    return round(max(5.0, min(5.9, score)), 1)
+
+def _ensure_org_targets_uploader() -> pd.DataFrame:
+    """Provide a safe, optional uploader to set org targets without HTML.
+
+    - If org_targets.csv exists: load it.
+    - Else: allow admin (or operator) to upload a CSV to create it.
+    """
+    df_targets = _load_org_targets()
+    if not df_targets.empty:
+        return df_targets
+
+    with st.expander("⚙️ (운영용) 기관별 목표 인원 업로드", expanded=False):
+        st.caption("기관별 '참여율' 계산을 위해 목표 인원을 CSV로 업로드하세요. 예) organization,target")
+        up = st.file_uploader("기관별 목표 인원 CSV", type=["csv"], key="org_targets_uploader")
+        if up is not None:
+            try:
+                tdf = pd.read_csv(up)
+            except Exception:
+                tdf = pd.read_csv(up, encoding="utf-8-sig")
+            # reuse loader logic by temporarily normalizing
+            tmp_path = Path("._tmp_org_targets_upload.csv")
+            tdf.to_csv(tmp_path, index=False, encoding="utf-8-sig")
+            try:
+                # parse through _load_org_targets by pointing path
+                global ORG_TARGETS_PATH
+                old = ORG_TARGETS_PATH
+                ORG_TARGETS_PATH = tmp_path
+                parsed = _load_org_targets()
+            finally:
+                ORG_TARGETS_PATH = old
+                try:
+                    tmp_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+            if parsed.empty:
+                st.error("CSV 컬럼을 인식하지 못했습니다. 'organization'과 'target' 컬럼(또는 '기관','목표인원' 등)을 포함해 주세요.")
+            else:
+                # persist to default path
+                try:
+                    parsed.to_csv(ORG_TARGETS_PATH, index=False, encoding="utf-8-sig")
+                    st.success(f"저장 완료: {ORG_TARGETS_PATH.resolve()}")
+                    return parsed
+                except Exception as e:
+                    st.error(f"저장 실패: {e}")
+        return pd.DataFrame(columns=["organization", "target"])
+def render_org_dashboard_main(user_org: str | None, emp_df: pd.DataFrame | None) -> None:
+    """Main-screen organization dashboard (NO unsafe HTML).
+
+    목표:
+      - 기관별 참여 현황, 평균 점수, 순위를 메인 화면에서 '대시보드' 형태로 제공
+      - unsafe_allow_html 및 raw HTML 블록을 사용하지 않아 HTML 노출/투명 렌더링 이슈를 예방
+    데이터:
+      - 직원 명단(선택): 기관별 총 인원(모수)
+      - 로그: 현재 참여/점수/수료 현황
+    """
+    st.markdown("### 🏢 기관별 참여·점수 현황 (대시보드)")
+
+    # 1) Load logs
     df, err = _load_log_df()
     if err:
         st.info(err)
+
+    if df is None or df.empty:
+        st.info("아직 집계할 학습 로그가 없습니다. 첫 참가자가 시작하면 기관별 현황이 표시됩니다.")
         return
 
     try:
         snap = _build_participant_snapshot(df)
-        participants = snap.get("participants", pd.DataFrame())
-        if participants is None or participants.empty:
-            st.info("표시할 누적 점수 데이터가 없습니다.")
-            return
-
-        # 참여자 최신 점수 기준 집계
-        org_score = (
-            participants.groupby("organization", as_index=False)
-            .agg(
-                cumulative_score=("total_score", "sum"),
-                participant_count=("learner_id", "nunique"),
-                avg_score=("total_score", "mean"),
-            )
-        )
-        org_score["organization"] = org_score["organization"].fillna("미분류").astype(str)
-
-        # 직원명단 기반 전체 인원(분모) 집계 -> 참여율 계산
-        emp_df, _ = load_employee_master_df()
-        if emp_df is not None and not emp_df.empty:
-            emp_base = emp_df.copy()
-            emp_base["organization"] = emp_base["organization"].fillna("미분류").astype(str)
-            # 사번이 비어있는 경우를 대비해 이름 기준으로 대체 식별
-            emp_base["_emp_key"] = emp_base["employee_no"].astype(str).str.strip()
-            emp_base.loc[emp_base["_emp_key"] == "", "_emp_key"] = emp_base["name"].astype(str).str.strip()
-            org_base = (
-                emp_base.groupby("organization", as_index=False)
-                .agg(total_employees=("_emp_key", "nunique"))
-            )
-        else:
-            org_base = pd.DataFrame(columns=["organization", "total_employees"])
-
-        merged = org_base.merge(org_score, on="organization", how="outer")
-        for col in ["total_employees", "cumulative_score", "participant_count", "avg_score"]:
-            if col not in merged.columns:
-                merged[col] = 0
-        merged["total_employees"] = pd.to_numeric(merged["total_employees"], errors="coerce").fillna(0).astype(int)
-        merged["cumulative_score"] = pd.to_numeric(merged["cumulative_score"], errors="coerce").fillna(0.0)
-        merged["participant_count"] = pd.to_numeric(merged["participant_count"], errors="coerce").fillna(0).astype(int)
-        merged["avg_score"] = pd.to_numeric(merged["avg_score"], errors="coerce").fillna(0.0)
-
-        merged["participation_rate"] = np.where(
-            merged["total_employees"] > 0,
-            (merged["participant_count"] / merged["total_employees"] * 100.0),
-            np.nan,
-        )
-
-        merged = merged.sort_values(
-            ["cumulative_score", "avg_score", "participant_count", "organization"],
-            ascending=[False, False, False, True],
-        ).reset_index(drop=True)
-        merged["rank"] = np.arange(1, len(merged) + 1)
-
-        if merged.empty:
-            st.info("기관별 누적 점수 데이터가 없습니다.")
-            return
-
-        # 시각 강조용 HTML 테이블
-        st.markdown(
-            """
-            <style>
-            .intro-org-board-wrap{
-              background: linear-gradient(180deg, rgba(12,20,38,.95), rgba(10,15,28,.96));
-              border:1px solid rgba(71,106,178,.35);
-              border-radius:16px;
-              padding:14px 14px 10px 14px;
-              box-shadow: 0 8px 24px rgba(0,0,0,.28);
-              margin-bottom: 8px;
-            }
-            .intro-org-board-sub{
-              color:#BFD2FF; font-size:.86rem; margin-top:-2px; margin-bottom:10px; opacity:.95;
-            }
-            .intro-org-table{
-              width:100%;
-              border-collapse: separate;
-              border-spacing:0 6px;
-              table-layout: fixed;
-            }
-            .intro-org-table thead th{
-              text-align:left;
-              font-size:.86rem;
-              color:#DDE8FF;
-              background: rgba(62,90,152,.30);
-              border-top:1px solid rgba(120,150,220,.22);
-              border-bottom:1px solid rgba(120,150,220,.16);
-              padding:9px 10px;
-            }
-            .intro-org-table thead th:first-child{border-radius:10px 0 0 10px;}
-            .intro-org-table thead th:last-child{border-radius:0 10px 10px 0;}
-            .intro-org-table tbody td{
-              padding:10px 10px;
-              background: rgba(19,28,50,.92);
-              border-top:1px solid rgba(114,145,214,.16);
-              border-bottom:1px solid rgba(114,145,214,.10);
-              color:#F4F8FF;
-              font-size:.92rem;
-              vertical-align: middle;
-            }
-            .intro-org-table tbody tr td:first-child{
-              border-radius:12px 0 0 12px;
-              width:68px;
-              font-weight:700;
-            }
-            .intro-org-table tbody tr td:last-child{border-radius:0 12px 12px 0;}
-            .org-rank-badge{
-              display:inline-flex; align-items:center; justify-content:center;
-              min-width:34px; height:28px; border-radius:999px;
-              font-weight:800; font-size:.86rem;
-              border:1px solid rgba(255,255,255,.18);
-              background: rgba(255,255,255,.06);
-              color:#EAF1FF;
-            }
-            .org-rank-top1{ background: linear-gradient(135deg,#7A5A00,#D9B342); color:#FFF8DA; border-color:#E8CF75; }
-            .org-rank-top2{ background: linear-gradient(135deg,#4B5563,#AEB7C2); color:#F5F7FA; border-color:#C9D0D8; }
-            .org-rank-top3{ background: linear-gradient(135deg,#5D3D1E,#C9853A); color:#FFF1DF; border-color:#E3AE72; }
-            .org-name-cell{font-weight:700; color:#FFFFFF; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
-            .org-num-strong{font-weight:800; color:#79F2B0;}
-            .org-subtle{color:#C5D5FB; font-size:.82rem;}
-            .org-rate-wrap{
-              display:flex; align-items:center; gap:8px;
-            }
-            .org-rate-bar{
-              flex:1; min-width:110px; height:10px; border-radius:999px;
-              background: rgba(255,255,255,.08);
-              overflow:hidden; border:1px solid rgba(255,255,255,.06);
-            }
-            .org-rate-fill{
-              height:100%;
-              background: linear-gradient(90deg, #2BD676, #83F1FF);
-              box-shadow: 0 0 12px rgba(43,214,118,.35);
-            }
-            .org-rate-text{min-width:48px; text-align:right; font-weight:700; color:#EFFFF7; font-size:.86rem;}
-        .map-pollen-overlay{
-            position:absolute; inset:0; pointer-events:none; overflow:hidden;
-            border-radius:14px;
-        }
-        .map-pollen-overlay .pollen-dot{
-            position:absolute;
-            border-radius:50%;
-            background: radial-gradient(circle, rgba(255,244,169,.95) 0%, rgba(255,220,101,.55) 48%, rgba(255,220,101,0) 72%);
-            box-shadow:0 0 14px rgba(255,221,102,.35);
-            animation: pollenFloat 5s ease-in-out forwards;
-            opacity:0;
-        }
-        .map-fade-wrap.celebrate{
-            box-shadow: 0 0 0 1px rgba(255,227,130,.22), 0 10px 28px rgba(255,221,102,.12);
-        }
-        @keyframes pollenFloat{
-            0%{ transform:translateY(12px) scale(.85); opacity:0; }
-            10%{ opacity:.95; }
-            65%{ opacity:.88; }
-            100%{ transform:translateY(-42px) scale(1.18); opacity:0; }
-        }
-        .stage-clear-banner{ animation: stageClearPulse .9s ease-in-out 2; }
-        @keyframes stageClearPulse{
-            0%{ transform:scale(0.995); box-shadow:0 0 0 rgba(0,0,0,0); }
-            50%{ transform:scale(1.01); box-shadow:0 8px 18px rgba(59,130,246,.16); }
-            100%{ transform:scale(1); box-shadow:0 0 0 rgba(0,0,0,0); }
-        }
-        .retry-offer-card{
-            margin: 10px 0 10px 0;
-            padding: 14px 16px;
-            border-radius: 14px;
-            border:1px solid rgba(255,214,102,.35);
-            background: linear-gradient(180deg, rgba(38,31,10,.78), rgba(19,22,33,.88));
-            box-shadow: 0 8px 24px rgba(0,0,0,.22);
-            text-align: center;
-        }
-        .retry-offer-title{ color:#FFE7A0; font-weight:800; font-size:1.03rem; margin-bottom:6px; }
-        .retry-offer-body{ color:#F3F7FF; font-size:.94rem; margin-bottom:4px; }
-        .retry-offer-desc{ color:#DCE8FF; font-size:.90rem; line-height:1.45; margin-bottom:6px; }
-        .retry-offer-note{ color:#BFD1F6; font-size:.82rem; }
-            
-/* Gold highlight for key phrases */
-.gold {
-    color: #D4AF37 !important;
-    font-weight: 800 !important;
-}
-.brief-chip.gold-chip {
-    border-color: rgba(212,175,55,0.55) !important;
-    color: #D4AF37 !important;
-}
-</style>
-            """,
-            unsafe_allow_html=True,
-        )
-
-        rows_html = []
-        for _, row in merged.iterrows():
-            rank = int(row.get("rank", 0) or 0)
-            org_name = html.escape(str(row.get("organization", "미분류")))
-            cum = int(round(float(row.get("cumulative_score", 0) or 0)))
-            avg = float(row.get("avg_score", 0) or 0.0)
-            p_cnt = int(row.get("participant_count", 0) or 0)
-            total_emp = int(row.get("total_employees", 0) or 0)
-            rate = row.get("participation_rate", np.nan)
-            has_rate = pd.notna(rate)
-            rate_val = float(rate) if has_rate else 0.0
-            rate_pct = max(0.0, min(100.0, rate_val))
-            rank_cls = "org-rank-badge"
-            if rank == 1:
-                rank_cls += " org-rank-top1"
-            elif rank == 2:
-                rank_cls += " org-rank-top2"
-            elif rank == 3:
-                rank_cls += " org-rank-top3"
-            if rank <= 3:
-                rank_label = {1: "🥇1", 2: "🥈2", 3: "🥉3"}[rank]
-            else:
-                rank_label = str(rank)
-
-            participant_label = f"{p_cnt}명"
-            if total_emp > 0:
-                participant_label = f"{p_cnt} / {total_emp}명"
-
-            rate_display = f"{rate_val:.1f}%" if has_rate else "-"
-
-            rows_html.append(
-                f"""
-                <tr>
-                  <td><span class="{rank_cls}">{rank_label}</span></td>
-                  <td class="org-name-cell" title="{org_name}">{org_name}</td>
-                  <td><span class="org-num-strong">{cum:,}점</span></td>
-                  <td>{avg:.1f}점</td>
-                  <td>{participant_label}<div class="org-subtle">참여자수</div></td>
-                  <td>
-                    <div class="org-rate-wrap">
-                      <div class="org-rate-bar"><div class="org-rate-fill" style="width:{rate_pct:.1f}%;"></div></div>
-                      <div class="org-rate-text">{rate_display}</div>
-                    </div>
-                  </td>
-                </tr>
-                """
-            )
-
-        st.markdown(
-            f"""
-            <div class="intro-org-board-wrap">
-              <div class="intro-org-board-sub">메인 화면에서는 기관별 누적 현황 요약만 표시됩니다. 상세 로그/통계는 관리자 대시보드에서 확인하세요.</div>
-              <table class="intro-org-table">
-                <thead>
-                  <tr>
-                    <th style="width:68px;">순위</th>
-                    <th>기관명</th>
-                    <th style="width:140px;">누적 점수</th>
-                    <th style="width:140px;">참가자 평균점수</th>
-                    <th style="width:150px;">참여자 수</th>
-                    <th style="width:220px;">참여율</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {''.join(rows_html)}
-                </tbody>
-              </table>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
+        org_summary = snap.get("org_summary")
     except Exception as e:
-        st.info(f"기관별 누적 현황 표시 중 오류가 발생했습니다: {e}")
+        st.warning(f"기관별 집계 생성 중 오류가 발생했습니다: {e}")
+        return
+
+    if org_summary is None or org_summary.empty:
+        st.info("현재 표시할 기관별 집계 데이터가 없습니다.")
+        return
+
+    org_df = org_summary.copy()
+    # 2) Add targets / headcount & participation rate + participation rate score
+    targets_df = _ensure_org_targets_uploader()
+    org_df["organization"] = org_df["organization"].apply(_normalize_org_name)
+
+    # Prefer explicit targets; fallback to employee master headcount if available
+    if targets_df is not None and not targets_df.empty:
+        org_df = org_df.merge(targets_df, on="organization", how="left")
+    else:
+        org_df["target"] = np.nan
+
+    # Optional fallback headcount from employee master (if targets not provided)
+    if ("target" not in org_df.columns) or org_df["target"].isna().all():
+        if emp_df is not None and not emp_df.empty and "organization" in emp_df.columns:
+            emp_org = emp_df.copy()
+            emp_org["organization"] = emp_org["organization"].apply(_normalize_org_name)
+            headcount = emp_org.groupby("organization", as_index=False).agg(total_employees=("employee_no", "count"))
+            org_df = org_df.merge(headcount, on="organization", how="left")
+            org_df["target"] = pd.to_numeric(org_df["total_employees"], errors="coerce")
+        else:
+            org_df["target"] = np.nan
+
+    org_df["target"] = pd.to_numeric(org_df["target"], errors="coerce").replace({0: np.nan})
+
+    org_df["participation_rate"] = np.where(
+        org_df["target"].notna(),
+        (org_df["participants"] / org_df["target"]) * 100.0,
+        np.nan,
+    )
+    org_df["participation_rate_score"] = org_df["participation_rate"].apply(_participation_rate_score)
+
+    # 3) Ranking
+ (avg score rate first)
+    rank_key = "avg_score_rate" if "avg_score_rate" in org_df.columns else "avg_score"
+    org_df = org_df.sort_values(
+        [rank_key, "participants", "organization"],
+        ascending=[False, False, True],
+    ).reset_index(drop=True)
+    org_df["rank"] = np.arange(1, len(org_df) + 1)
+
+    # 4) My organization highlight
+    user_org_clean = (user_org or "").strip() or None
+    my_row = None
+    if user_org_clean:
+        match = org_df[org_df["organization"].astype(str).str.strip() == user_org_clean]
+        if not match.empty:
+            my_row = match.iloc[0].to_dict()
+
+    top = st.columns([1, 1, 1, 1])
+    with top[0]:
+        st.metric("집계 기관 수", f"{int(org_df['organization'].nunique())}")
+    with top[1]:
+        st.metric("총 참여자(중복 제거)", f"{int(org_df['participants'].sum())}")
+
+    with top[2]:
+        overall_asr = pd.to_numeric(org_df.get("avg_score_rate", np.nan), errors="coerce")
+        if overall_asr.notna().any():
+            st.metric("전체 평균 점수(%)", f"{float(overall_asr.mean()):.1f}%")
+        else:
+            overall_avg = pd.to_numeric(org_df.get("avg_score", np.nan), errors="coerce")
+            st.metric("전체 평균 점수", f"{float(overall_avg.mean()):.1f}" if overall_avg.notna().any() else "-")
+
+    with top[3]:
+        overall_completion = pd.to_numeric(org_df.get("completion_rate", np.nan), errors="coerce")
+        st.metric("전체 수료율", f"{float(overall_completion.mean()):.1f}%" if overall_completion.notna().any() else "-")
+
+    if my_row:
+        st.markdown("#### ✅ 내 기관 현황")
+                c1, c2, c3, c4, c5 = st.columns([1, 1, 1, 1, 1])
+
+                participants = int(my_row.get("participants", 0) or 0)
+                target = my_row.get("target", np.nan)
+                part_label = f"{participants}명" if pd.isna(target) else f"{participants}/{int(target)}명"
+
+                with c1:
+                    st.metric("참여 인원", part_label)
+                with c2:
+                    pr = my_row.get("participation_rate", np.nan)
+                    st.metric("참여율", "-" if pd.isna(pr) else f"{float(pr):.1f}%")
+                with c3:
+                    prs = my_row.get("participation_rate_score", np.nan)
+                    st.metric("참여율 점수", "-" if pd.isna(prs) else f"{float(prs):.1f}점")
+                with c4:
+                    asr = my_row.get("avg_score_rate", np.nan)
+                    if pd.isna(asr):
+                        st.metric("평균 점수", f"{float(my_row.get('avg_score', 0) or 0):.1f}")
+                    else:
+                        st.metric("평균 점수(%)", f"{float(asr):.1f}%")
+                with c5:
+                    st.metric("기관 순위", f"{int(my_row.get('rank', 0) or 0)}위")
+
+        st.caption("※ 순위는 평균 점수(%) 기준이며, 동점 시 참여자 수가 많은 기관이 우선됩니다.")
+    else:
+        st.info("내 기관 정보를 확인하면(성명 조회 후 본인 정보 확인) 내 기관 순위/현황을 별도로 표시합니다.")
+
+    # 5) Leaderboard
+    st.markdown("#### 🏅 상위 기관 순위 (Top 10)")
+    view_cols = ["rank", "organization", "participants", "target", "participation_rate", "participation_rate_score", "avg_score_rate", "completion_rate", "latest_activity"]
+    for col in view_cols:
+        if col not in org_df.columns:
+            org_df[col] = np.nan
+
+    board = org_df[view_cols].copy().rename(
+        columns={
+            "rank": "순위",
+            "organization": "기관",
+            "participants": "참여자(명)",
+            "target": "목표(명)",
+            "participation_rate": "참여율(%)",
+            "participation_rate_score": "참여율점수",
+            "avg_score_rate": "평균점수(%)",
+            "completion_rate": "수료율(%)",
+            "latest_activity": "최근 활동",
+        }
+    )
+
+    for c in ["참여율(%)", "참여율점수", "평균점수(%)", "수료율(%)"]:
+        board[c] = pd.to_numeric(board[c], errors="coerce").round(1)
+    board["최근 활동"] = pd.to_datetime(board["최근 활동"], errors="coerce").dt.strftime("%Y-%m-%d %H:%M").fillna("-")
+
+    st.dataframe(board.head(10), use_container_width=True, hide_index=True)
+
+    with st.expander("전체 기관 목록 보기", expanded=False):
+        st.dataframe(board, use_container_width=True, hide_index=True)
 
 
 def render_admin_password_gate():
@@ -2569,7 +2562,7 @@ def render_admin_password_gate():
         """
         <div class='admin-lock'>
           <div style='font-weight:800; margin-bottom:4px;'>🔐 관리자 화면</div>
-          <div style='font-size:0.9rem; color:#EADFC4;'>기관별 누적 대시보드 / 문항별 통계 / 전체 참가자 현황은 관리자 인증 후 확인할 수 있습니다.</div>
+          <div style='font-size:0.9rem; color:#EADFC4;'>문항별 통계 / 전체 참가자 현황 / 로그 관리는 관리자 인증 후 확인할 수 있습니다.</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -2597,128 +2590,6 @@ def render_admin_password_gate():
     st.caption("※ 보안을 위해 실제 운영 시 환경변수 COMPLIANCE_ADMIN_PASSWORD 설정을 권장합니다.")
 
 
-def _render_org_ranking_cards(org_summary: pd.DataFrame, top_n: int = 5):
-    if org_summary.empty:
-        st.info("기관 요약 데이터가 없습니다.")
-        return
-    top_df = org_summary.head(top_n).copy()
-    st.markdown("#### 🏅 기관별 평균 점수 랭킹")
-    for i, row in top_df.reset_index(drop=True).iterrows():
-        pct = float(row.get("avg_score_rate", 0) or 0)
-        st.markdown(
-            f"""
-            <div class='rank-card'>
-              <div class='rank-title'>{i+1}. {row['organization']}</div>
-              <div class='rank-bar'><div class='rank-fill' style='width:{max(0, min(100, pct))}%;'></div></div>
-              <div class='rank-meta'>
-                평균 점수율 {pct:.1f}% · 참여자 {int(row.get('participants', 0))}명 · 수료율 {float(row.get('completion_rate', 0) or 0):.1f}%
-              </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-
-def render_org_dashboard(compact: bool = False):
-    st.markdown("### 🏢 기관별 참여/점수 대시보드")
-
-    df, err = _load_log_df()
-    if err:
-        st.info(err)
-        return
-
-    snap = _build_participant_snapshot(df)
-    participants = snap["participants"]
-    participants_view = snap["participants_view"]
-    org_summary = snap["org_summary"]
-
-    if participants.empty:
-        st.info("표시할 참여자 데이터가 없습니다.")
-        return
-
-    total_people = int(participants["learner_id"].nunique())
-    completed_people = int(participants["is_completed"].sum())
-    avg_score_all = float(participants["total_score"].mean()) if total_people else 0.0
-    avg_completion_all = float(participants["completion_rate_q"].mean()) if total_people else 0.0
-
-    st.markdown(
-        f"""
-        <div class='dash-grid'>
-          <div class='dash-card'><div class='label'>참여자 수</div><div class='value'>{total_people}명</div></div>
-          <div class='dash-card'><div class='label'>수료자 수</div><div class='value'>{completed_people}명</div></div>
-          <div class='dash-card'><div class='label'>전체 평균 점수</div><div class='value'>{avg_score_all:.1f}/{TOTAL_SCORE}</div></div>
-          <div class='dash-card'><div class='label'>전체 평균 진행률</div><div class='value'>{avg_completion_all:.1f}%</div></div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    c_left, c_right = st.columns([1.2, 1])
-    with c_left:
-        org_view = org_summary.copy()
-        if not org_view.empty:
-            org_view["latest_activity"] = pd.to_datetime(org_view["latest_activity"], errors="coerce").dt.strftime("%Y-%m-%d %H:%M").fillna("-")
-            org_view = org_view.rename(columns={
-                "organization": "기관",
-                "participants": "참여자 수",
-                "completed": "수료자 수",
-                "completion_rate": "수료율(%)",
-                "avg_score": "평균 점수",
-                "avg_score_rate": "평균 점수율(%)",
-                "avg_completion_rate": "평균 진행률(%)",
-                "attempts_started": "참여 회차 수",
-        "completed_attempts": "완료 회차 수",
-        "total_attempts": "누적 제출 수",
-                "latest_activity": "최근 참여",
-            })
-            safe_dataframe(org_view, use_container_width=True, height=280 if compact else None)
-
-            chart_df = org_view[["기관", "평균 점수율(%)"]].set_index("기관")
-            safe_bar_chart(chart_df)
-        else:
-            st.info("기관 집계 데이터가 없습니다.")
-
-    with c_right:
-        _render_org_ranking_cards(org_summary, top_n=5 if not compact else 3)
-
-    if compact:
-        return
-
-    st.markdown("#### 👥 참가자 누적 현황")
-    org_filter_options = ["전체"] + sorted([x for x in participants_view["organization"].dropna().astype(str).unique().tolist() if x])
-    selected_org = st.selectbox("기관 필터", org_filter_options, key="org_dashboard_filter")
-
-    p_view = participants_view.copy()
-    if selected_org != "전체":
-        p_view = p_view[p_view["organization"] == selected_org]
-
-    p_view["employee_no"] = p_view.get("employee_no", "").fillna("").astype(str).replace("", "-")
-    p_view = p_view.rename(columns={
-        "employee_no": "사번",
-        "organization": "기관",
-        "name": "이름",
-        "status": "상태",
-        "total_score": "총점",
-        "score_rate": "점수율(%)",
-        "answered_questions": "제출 문항수",
-        "completed_themes": "완료 테마수",
-        "completion_rate_q": "문항 진행률(%)",
-        "total_attempts": "누적 제출 수",
-        "last_activity": "최근 참여",
-    })
-    show_cols = ["사번", "기관", "이름", "상태", "총점", "점수율(%)", "참여 회차 수", "완료 회차 수", "완료 테마수", "제출 문항수", "문항 진행률(%)", "누적 제출 수", "최근 참여"]
-    safe_dataframe(p_view[show_cols], use_container_width=True)
-
-    csv_bytes = p_view[show_cols].to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
-    st.download_button(
-        "📥 참가자 현황 CSV 다운로드",
-        data=csv_bytes,
-        file_name=f"participants_dashboard_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-        mime="text/csv",
-        use_container_width=True,
-    )
-
-
 def render_admin_page():
     st.title("🔐 관리자 대시보드")
 
@@ -2741,10 +2612,7 @@ def render_admin_page():
             st.session_state.admin_authed = False
             st.rerun()
 
-    tab1, tab2, tab3 = st.tabs(["🏢 기관 대시보드", "🧠 문항 통계", "📄 로그 관리"])
-
-    with tab1:
-        render_org_dashboard(compact=False)
+    tab2, tab3 = st.tabs(["🧠 문항 통계", "📄 로그 관리"])
 
     with tab2:
         try:
@@ -2787,6 +2655,7 @@ def render_admin_page():
                     st.error(f"복구 실패: {ee}")
         except Exception as e:
             st.error(f"로그 관리 탭 오류: {e}")
+
 
 def render_admin_question_stats():
     st.markdown("### 🛠 관리자용 문항별 정답률 통계")
@@ -3463,9 +3332,6 @@ try:
             """,
             unsafe_allow_html=True,
         )
-
-        render_intro_org_cumulative_board()
-
         emp_df, emp_meta_msg = load_employee_master_df()
 
         st.markdown("### 👤 참가자 확인")
@@ -3541,6 +3407,9 @@ try:
             _render_confirm_readonly_field(col_a, '사번', selected_emp.get('employee_no', ''))
             _render_confirm_readonly_field(col_b, '이름', selected_emp.get('name', ''))
             _render_confirm_readonly_field(col_c, '소속 기관', selected_emp.get('organization', ''))
+
+            # 기관별 현황 대시보드 (HTML 미사용)
+            render_org_dashboard_main(selected_emp.get('organization', ''), emp_df)
 
             st.markdown("<div style='height:6px;'></div>", unsafe_allow_html=True)
             if st.button('모험 시작하기', use_container_width=True):
@@ -3738,7 +3607,7 @@ try:
                 use_container_width=True,
             )
 
-        st.info("관리자용 기관 대시보드 / 문항 통계는 좌측 사이드바의 ‘관리자 대시보드’에서 확인할 수 있습니다.")
+        st.info("관리자용 문항 통계/로그 관리는 좌측 사이드바의 ‘관리자 대시보드’에서 확인할 수 있습니다.")
 
         st.markdown("<div class='brief-actions-wrap'></div>", unsafe_allow_html=True)
         c1, c2 = st.columns([1, 1], gap='large')
