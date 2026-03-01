@@ -1546,9 +1546,36 @@ else:
 
 
 def append_attempt_log(mission_key: str, q_idx: int, q_type: str, payload: dict):
+    """Append a normalized training attempt row to in-memory history and CSV.
+
+    NOTE:
+    - We intentionally support synthetic events (e.g., END markers) whose mission_key
+      is not part of SCENARIOS. This prevents KeyError and keeps org aggregation stable.
+    """
     user = st.session_state.get("user_info", {})
-    mission = SCENARIOS[mission_key]
-    question = mission["quiz"][q_idx]
+
+    mission = SCENARIOS.get(mission_key)
+    question = None
+
+    mission_title = ""
+    question_text = ""
+    max_score = 0
+
+    if mission and isinstance(q_idx, int) and 0 <= q_idx < len(mission.get("quiz", [])):
+        question = mission["quiz"][q_idx]
+        mission_title = mission.get("title", "")
+        question_text = question.get("question", "")
+        max_score = int(question.get("score", 0) or 0)
+    else:
+        # Synthetic/special events (e.g., "END") or unknown mission keys.
+        mission_title = payload.get("mission_title") or ("교육 종료" if q_type == "END" else str(mission_key))
+        question_text = payload.get("question") or ("교육 종료" if q_type == "END" else "")
+        max_score = int(payload.get("max_score", 0) or 0)
+
+    question_index = (q_idx + 1) if isinstance(q_idx, int) and q_idx >= 0 else ""
+    question_code = (
+        f"{mission_key}_Q{q_idx+1}" if isinstance(q_idx, int) and q_idx >= 0 else str(mission_key)
+    )
 
     row = _normalize_log_row({
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -1559,15 +1586,15 @@ def append_attempt_log(mission_key: str, q_idx: int, q_type: str, payload: dict)
         "organization": user.get("org", ""),
         "department": "",
         "mission_key": mission_key,
-        "mission_title": mission["title"],
-        "question_index": q_idx + 1,
-        "question_code": f"{mission_key}_Q{q_idx+1}",
+        "mission_title": mission_title,
+        "question_index": question_index,
+        "question_code": question_code,
         "question_type": q_type,
-        "question": question["question"],
+        "question": question_text,
         "selected_or_text": payload.get("selected_or_text", ""),
         "is_correct": payload.get("is_correct", ""),
         "awarded_score": payload.get("awarded_score", 0),
-        "max_score": question.get("score", 0),
+        "max_score": max_score,
         "attempt_no_for_mission": st.session_state.attempt_counts.get(mission_key, 0),
     })
 
