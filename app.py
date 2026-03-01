@@ -5,16 +5,12 @@ import csv
 import io
 import time
 import uuid
-import base64
 import pandas as pd
 import numpy as np
 try:
     from streamlit.errors import StreamlitInvalidHeightError
 except Exception:
     StreamlitInvalidHeightError = Exception
-import streamlit.components.v1 as components
-
-
 def scroll_to_top(delay_ms: int = 0) -> None:
     """Best-effort scroll-to-top.
 
@@ -560,7 +556,6 @@ def safe_bar_chart(data, **kwargs):
 
 # =========================================================
 # 2) 파일 경로 / 에셋
-#    (이미지/사운드 모두 app.py와 같은 폴더에 있다고 가정)
 # =========================================================
 BASE_DIR = Path(__file__).parent if "__file__" in globals() else Path.cwd()
 ASSET_DIR = BASE_DIR
@@ -641,13 +636,6 @@ ENDING_IMAGE_CANDIDATE_NAMES = [
 # --- 관리자 통계/채점 기준 ---
 TEXT_CORRECT_THRESHOLD = 0.7  # 주관식 점수율 70% 이상이면 '정답'으로 집계
 
-# --- 사운드 / 아이콘 자원 ---
-SFX = {
-    "correct": BASE_DIR / "sfx_correct.mp3",
-    "wrong": BASE_DIR / "sfx_wrong.mp3",
-    "conquer": BASE_DIR / "sfx_conquer.mp3",
-    "final": BASE_DIR / "sfx_final.mp3",
-}
 
 THEME_ICONS = {
     "subcontracting": "🚜",
@@ -672,21 +660,8 @@ EMPLOYEE_COL_ALIASES = {
 }
 
 # 전체 과정 공통 BGM (권장 파일명)
-GLOBAL_BGM_CANDIDATE_NAMES = [
-    "2026 Compliance Adventure_bgm.mp3",  # 사용자 지정 최종 파일명
-    "2026_Compliance_Adventure_bgm.mp3",
-    "bgm_main.mp3",
-]
 
 # 구버전 단계별 파일명도 fallback 지원 (기존 운영 호환)
-BGM = {
-    "intro": BASE_DIR / "bgm_intro.mp3",
-    "map": BASE_DIR / "bgm_map.mp3",
-    "subcontracting": BASE_DIR / "bgm_subcontracting.mp3",
-    "security": BASE_DIR / "bgm_security.mp3",
-    "fairtrade": BASE_DIR / "bgm_fairtrade.mp3",
-    "ending": BASE_DIR / "bgm_final.mp3",
-}
 
 ADMIN_PASSWORD = os.environ.get("COMPLIANCE_ADMIN_PASSWORD", "admin2026")
 
@@ -890,9 +865,6 @@ def init_state():
         "log_write_error": None,
         "played_final_fanfare": False,
         "admin_authed": False,
-        "pending_sfx": None,
-        "bgm_enabled": True,
-        "audio_debug": False,
         "employee_lookup_candidates": [],
         "employee_selected_record": None,
         "employee_lookup_modal_open": False,
@@ -993,13 +965,7 @@ def mark_theme_complete_if_ready(m_key: str):
             st.session_state.map_fx_done = False
             st.session_state.map_celebrate_theme = m_key
             st.session_state.map_celebrate_until = float(time.time()) + 5.0
-            # 테마 정복 사운드 큐 (최종 정복은 fanfare 우선)
-            if len(st.session_state.completed) >= len(SCENARIO_ORDER):
-                queue_sfx("final")
-            else:
-                queue_sfx("conquer")
 # =========================================================
-# 5) 유틸 함수 (이미지 / 사운드 / 로그 / 평가)
 # =========================================================
 def get_current_map_image():
     stage_idx = min(len(st.session_state.get("completed", [])), 3)
@@ -1060,111 +1026,15 @@ def show_map_with_fade(map_path: Path, caption: str = None, celebrate: bool = Fa
 
 from typing import Optional
 
-def resolve_bgm_path(bgm_key: str) -> Optional[Path]:
-    # 1) 전체 공통 BGM 우선 사용
-    for name in GLOBAL_BGM_CANDIDATE_NAMES:
-        gp = BASE_DIR / name
-        if gp.exists():
-            return gp
-    # 2) 없으면 단계별 BGM fallback
-    p = BGM.get(bgm_key)
-    if p and p.exists():
-        return p
-    return None
 
 
-def _audio_component_html(audio_b64: str, *, loop: bool = False, hidden_label: str = "audio"):
-    loop_attr = " loop" if loop else ""
-    html = f"""
-    <html>
-      <body style="margin:0; padding:0; background:transparent;">
-        <audio id="{hidden_label}" autoplay{loop_attr} playsinline webkit-playsinline preload="auto" style="display:none;">
-          <source src="data:audio/mp3;base64,{audio_b64}" type="audio/mpeg">
-        </audio>
-        <script>
-          (function() {{
-            const a = document.getElementById("{hidden_label}");
-            if (!a) return;
-            a.volume = 0.65;
-            const tryPlay = () => {{
-              const p = a.play();
-              if (p && p.catch) p.catch(() => {{}});
-            }};
-            // 최초 진입 시 자동재생 시도
-            tryPlay();
-            setTimeout(tryPlay, 120);
-            setTimeout(tryPlay, 400);
-            // 브라우저 자동재생 제한 시 첫 사용자 상호작용에서 재시도
-            ["click", "keydown", "touchstart"].forEach((evt) => {{
-              document.addEventListener(evt, tryPlay, {{ once: false, passive: true }});
-            }});
-          }})();
-        </script>
-      </body>
-    </html>
-    """
-    components.html(html, height=0, width=0)
 
 
-def queue_sfx(sfx_key: str):
-    st.session_state.pending_sfx = sfx_key
 
 
-def play_sfx_now(sfx_key: str):
-    sfx_path = SFX.get(sfx_key)
-    if not sfx_path or not sfx_path.exists():
-        return
-    try:
-        sfx_b64 = base64.b64encode(sfx_path.read_bytes()).decode("utf-8")
-        _audio_component_html(sfx_b64, loop=False, hidden_label=f"sfx_now_{sfx_key}_{int(time.time()*1000)}")
-    except Exception:
-        pass
 
 
-def _resolve_bgm_key():
-    stage = st.session_state.get("stage", "intro")
-    current = st.session_state.get("current_mission")
 
-    if stage == "intro":
-        return "intro"
-    if stage == "map":
-        return "map"
-    if stage in ("briefing", "quiz") and current in SCENARIOS:
-        return current
-    if stage == "ending":
-        return "ending"
-    return "map"
-
-
-def render_audio_system():
-    # 1) Background music (loop)
-    if st.session_state.get("bgm_enabled", True):
-        bgm_key = _resolve_bgm_key()
-        bgm_path = resolve_bgm_path(bgm_key)
-        if bgm_path and bgm_path.exists():
-            try:
-                bgm_b64 = base64.b64encode(bgm_path.read_bytes()).decode("utf-8")
-                # 전체 공통 BGM 사용 시 stage 전환에도 끊김을 최소화하도록 고정 라벨 사용
-                _audio_component_html(bgm_b64, loop=True, hidden_label="bgm_global")
-            except Exception:
-                pass
-
-    # 2) One-shot SFX (queued to survive st.rerun)
-    pending_key = st.session_state.get("pending_sfx")
-    if pending_key:
-        sfx_path = SFX.get(pending_key)
-        if sfx_path and sfx_path.exists():
-            try:
-                sfx_b64 = base64.b64encode(sfx_path.read_bytes()).decode("utf-8")
-                _audio_component_html(sfx_b64, loop=False, hidden_label=f"sfx_{pending_key}_{int(time.time()*1000)}")
-            except Exception:
-                pass
-        st.session_state.pending_sfx = None
-
-
-def render_audio_status_hint():
-    # 패널 제거 (최종본에서 사용하지 않음)
-    return
 
 def _normalize_log_row(raw: dict) -> dict:
     raw = raw or {}
@@ -1638,30 +1508,45 @@ def _render_employee_lookup_popup_body(name_query: str = ""):
     show_df = candidates[["employee_no", "name", "organization"]].copy()
     show_df.columns = ["사번", "이름", "소속 기관"]
 
-    safe_dataframe(show_df, use_container_width=True, height=min(320, 90 + len(show_df) * 35))
 
     exact_name = (name_query or "").strip()
     exact_cnt = int((candidates["name"].astype(str).str.strip() == exact_name).sum()) if exact_name else 0
     if exact_cnt >= 2:
         st.warning(f"동명이인 {exact_cnt}명이 확인되었습니다. 반드시 사번을 확인해 선택해주세요.")
 
-    options = list(range(len(candidates)))
-    default_idx = 0
-    if st.session_state.get("employee_selected_record"):
-        sel = st.session_state.get("employee_selected_record") or {}
+
+    # ✅ 동명이인 포함: 콤보박스 대신 '체크박스 1개 선택' 방식으로 단순화
+    show_editor = show_df.copy()
+    show_editor.insert(0, "선택", False)
+
+    # 이전 선택이 있으면 해당 행을 기본 선택
+    prev = st.session_state.get("employee_selected_record") or {}
+    if prev:
         for i, row in candidates.iterrows():
-            if str(row.get("employee_no", "")).strip() == str(sel.get("employee_no", "")).strip() and str(row.get("name", "")).strip() == str(sel.get("name", "")).strip():
-                default_idx = int(i)
+            if str(row.get("employee_no", "")).strip() == str(prev.get("employee_no", "")).strip() and str(row.get("name", "")).strip() == str(prev.get("name", "")).strip():
+                try:
+                    show_editor.loc[int(i), "선택"] = True
+                except Exception:
+                    pass
                 break
 
-    selected_idx = st.selectbox(
-        "본인 정보 선택",
-        options=options,
-        index=default_idx if options else 0,
-        format_func=lambda i: _employee_candidate_label(candidates.iloc[int(i)].to_dict()),
-        key="employee_candidate_select_idx_modal",
+    edited = st.data_editor(
+        show_editor,
+        hide_index=True,
+        use_container_width=True,
+        disabled=["사번", "이름", "소속 기관"],
+        column_config={
+            "선택": st.column_config.CheckboxColumn("선택", help="본인 정보 1개만 선택하세요."),
+        },
+        key="employee_confirm_table",
     )
 
+    selected_indices = list(edited.index[edited["선택"] == True])  # noqa: E712
+
+    # 미리보기: 선택 1개면 그 행, 아니면 첫 번째 행
+    selected_idx = int(selected_indices[0]) if len(selected_indices) == 1 else 0
+
+    # 2개 이상 선택은 확인 버튼 클릭 시 차단 (UX는 유지하면서 로직 단순화)
     preview = candidates.iloc[int(selected_idx)].to_dict()
     p1, p2, p3 = st.columns(3)
     _render_modal_readonly_field(p1, "사번", str(preview.get("employee_no", "")))
@@ -1672,6 +1557,9 @@ def _render_employee_lookup_popup_body(name_query: str = ""):
     c1, c2 = st.columns([1, 1], gap='large')
     with c1:
         if st.button("✅ 이 정보로 확인", key="employee_modal_confirm_btn", use_container_width=True):
+            if len(selected_indices) != 1:
+                st.warning("본인 정보를 **1개만** 체크(선택)한 후 확인을 눌러주세요.")
+                return
             row = candidates.iloc[int(selected_idx)].to_dict()
             emp_no = str(row.get("employee_no", "")).strip()
             emp_name = str(row.get("name", "")).strip() or "참가자"
@@ -2084,9 +1972,7 @@ def start_training_attempt_session(user_info: dict, attempt_round: int, *, skip_
 
     for k, v in keep_keys.items():
         # Avoid overwriting Streamlit widget-bound keys during runtime
-        if k in ("bgm_enabled", "audio_debug"):
-            continue
-        st.session_state[k] = v
+                st.session_state[k] = v
 
     award_participation_points_if_needed()
 
@@ -2752,8 +2638,6 @@ def render_mcq_question(m_key: str, q_idx: int, q_data: dict):
             "wrong_extra": q_data["wrong_extra"],
         }
         submissions[q_idx] = result
-
-        queue_sfx("correct" if is_correct else "wrong")
         try:
             st.toast("정답입니다!" if is_correct else "다시 생각해보세요", icon="✨" if is_correct else "⚠️")
         except Exception:
@@ -2897,7 +2781,6 @@ def render_text_question(m_key: str, q_idx: int, q_data: dict):
 
         ratio = (eval_res["awarded_score"] / q_data["score"]) if q_data["score"] else 0
         is_good = ratio >= TEXT_CORRECT_THRESHOLD
-        queue_sfx("correct" if is_good else "wrong")
         try:
             st.toast("주관식 답안이 잘 작성되었어요!" if is_good else "보완 포인트를 확인해보세요", icon="✨" if is_good else "⚠️")
         except Exception:
@@ -3047,10 +2930,7 @@ if pending:
         skip_to_stage=str(pending.get("skip_to_stage", "map") or "map"),
     )
     st.rerun()
-render_audio_system()
-
 with st.sidebar:
-    st.checkbox("🔊 배경음악 재생", key="bgm_enabled")
     st.markdown("---")
     st.caption("관리자")
     if st.button("🔐 관리자 대시보드", use_container_width=True):
@@ -3288,7 +3168,6 @@ try:
 
         st.balloons()
         if not st.session_state.get("played_final_fanfare", False):
-            play_sfx_now("final")
             st.session_state.played_final_fanfare = True
 
         st.title("🏆 Guardian Training Complete")
