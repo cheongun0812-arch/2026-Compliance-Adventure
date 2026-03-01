@@ -2427,6 +2427,9 @@ def render_org_dashboard_main(user_org: str | None, emp_df: pd.DataFrame | None)
       - 직원 명단(선택): 기관별 총 인원(모수)
       - 로그: 현재 참여/점수/수료 현황
     """
+    # (정책) 메인 화면 단순화: 기관 대시보드는 사이드바로 이동
+    return
+
     st.markdown("### 🏢 기관별 참여·점수 현황 (대시보드)")
 
     # 1) Load logs
@@ -2573,6 +2576,135 @@ def render_org_dashboard_main(user_org: str | None, emp_df: pd.DataFrame | None)
 
     with st.expander("전체 기관 목록 보기", expanded=False):
         st.dataframe(board, use_container_width=True, hide_index=True)
+
+
+
+def render_org_dashboard_sidebar(user_org: str | None, emp_df: pd.DataFrame | None) -> None:
+    """Sidebar organization dashboard (NO unsafe HTML).
+
+    목적:
+      - 메인 화면을 단순화하기 위해, 기관별 참여/점수 현황을 좌측 사이드바에 상시 노출
+      - HTML/components.html을 사용하지 않아 'HTML 노출/투명 렌더링' 문제 재발 방지
+
+    표시:
+      - 내 기관: 참여율/참여율점수/평균점수/순위 (가능할 때)
+      - 상위 기관 Top 5 (간단 표)
+    """
+    st.markdown("### 🏢 기관 현황")
+    st.caption("참여율 · 참여율점수 · 평균점수 · 순위")
+
+    df, err = _load_log_df()
+    if err:
+        st.info(err)
+
+    if df is None or df.empty:
+        st.info("아직 집계할 학습 로그가 없습니다.")
+        return
+
+    try:
+        snap = _build_participant_snapshot(df)
+        org_summary = snap.get("org_summary")
+    except Exception as e:
+        st.warning(f"집계 생성 오류: {e}")
+        return
+
+    if org_summary is None or org_summary.empty:
+        st.info("표시할 기관 집계가 없습니다.")
+        return
+
+    org_df = org_summary.copy()
+    org_df["organization"] = org_df["organization"].apply(_normalize_org_name)
+
+    # 목표 인원(타겟) + 참여율/참여율점수
+    targets_df = _load_org_targets()
+    if targets_df is not None and not targets_df.empty:
+        org_df = org_df.merge(targets_df, on="organization", how="left")
+    else:
+        org_df["target"] = np.nan
+
+    # 타겟이 없으면 직원명단(모수)로 대체(옵션)
+    if ("target" not in org_df.columns) or org_df["target"].isna().all():
+        if emp_df is not None and not emp_df.empty and "organization" in emp_df.columns:
+            emp_org = emp_df.copy()
+            emp_org["organization"] = emp_org["organization"].apply(_normalize_org_name)
+            if "employee_no" in emp_org.columns:
+                headcount = emp_org.groupby("organization", as_index=False).agg(total_employees=("employee_no", "count"))
+            else:
+                headcount = emp_org.groupby("organization", as_index=False).size().rename(columns={"size": "total_employees"})
+            org_df = org_df.merge(headcount, on="organization", how="left")
+            org_df["target"] = pd.to_numeric(org_df["total_employees"], errors="coerce")
+        else:
+            org_df["target"] = np.nan
+
+    org_df["target"] = pd.to_numeric(org_df["target"], errors="coerce").replace({0: np.nan})
+    org_df["participation_rate"] = np.where(
+        org_df["target"].notna(),
+        (org_df["participants"] / org_df["target"]) * 100.0,
+        np.nan,
+    )
+    org_df["participation_rate_score"] = org_df["participation_rate"].apply(_participation_rate_score)
+
+    # 순위
+    rank_key = "avg_score_rate" if "avg_score_rate" in org_df.columns else "avg_score"
+    org_df = org_df.sort_values(
+        [rank_key, "participants", "organization"],
+        ascending=[False, False, True],
+    ).reset_index(drop=True)
+    org_df["rank"] = np.arange(1, len(org_df) + 1)
+
+    # 내 기관(가능할 때)
+    user_org_clean = (user_org or "").strip() or None
+    if user_org_clean:
+        match = org_df[org_df["organization"].astype(str).str.strip() == user_org_clean]
+    else:
+        match = pd.DataFrame()
+
+    if not match.empty:
+        my = match.iloc[0].to_dict()
+        participants = int(my.get("participants", 0) or 0)
+        target = my.get("target", np.nan)
+        pr = my.get("participation_rate", np.nan)
+        prs = my.get("participation_rate_score", np.nan)
+        asr = my.get("avg_score_rate", np.nan)
+        rank = int(my.get("rank", 0) or 0)
+
+        st.markdown("**내 기관**")
+        st.metric("참여", f"{participants}명" if pd.isna(target) else f"{participants}/{int(target)}명")
+        st.metric("참여율", "-" if pd.isna(pr) else f"{float(pr):.1f}%")
+        st.metric("참여율점수", "-" if pd.isna(prs) else f"{float(prs):.1f}점")
+        if pd.isna(asr):
+            st.metric("평균점수", f"{float(my.get('avg_score', 0) or 0):.1f}")
+        else:
+            st.metric("평균점수(%)", f"{float(asr):.1f}%")
+        st.metric("순위", f"{rank}위")
+        st.markdown("---")
+    else:
+        st.info("성명 조회 후 본인 기관을 확인하면, 내 기관 지표가 표시됩니다.")
+        st.markdown("---")
+
+    st.markdown("**🏅 Top 5**")
+    view_cols = ["rank", "organization", "participants", "participation_rate", "avg_score_rate"]
+    for col in view_cols:
+        if col not in org_df.columns:
+            org_df[col] = np.nan
+
+    top5 = org_df[view_cols].head(5).copy().rename(
+        columns={
+            "rank": "순위",
+            "organization": "기관",
+            "participants": "참여",
+            "participation_rate": "참여율(%)",
+            "avg_score_rate": "평균점수(%)",
+        }
+    )
+    for c in ["참여율(%)", "평균점수(%)"]:
+        top5[c] = pd.to_numeric(top5[c], errors="coerce").round(1)
+
+    # 사이드바 폭을 고려해 table로 간단 표시
+    try:
+        st.table(top5)
+    except Exception:
+        st.dataframe(top5, use_container_width=True, hide_index=True)
 
 
 def render_admin_password_gate():
@@ -3327,29 +3459,32 @@ with st.sidebar:
             st.session_state.admin_authed = False
             st.rerun()
 
+    st.markdown("---")
+    # ✅ 전광판(상시 노출): 기관별 참여/점수 현황
+    # - 메인 화면을 단순화하고, 'HTML 노출/투명 렌더링' 이슈를 피하기 위해 Streamlit 기본 컴포넌트만 사용합니다.
+    sidebar_org = None
+    try:
+        if st.session_state.get("stage") == "intro":
+            _sel = st.session_state.get("employee_selected_record")
+            if isinstance(_sel, dict):
+                sidebar_org = str(_sel.get("organization", "")).strip() or None
+        if not sidebar_org:
+            sidebar_org = str(st.session_state.get("user_info", {}).get("org", "")).strip() or None
+    except Exception:
+        sidebar_org = None
+
+    # emp_df는 intro에서만 로드되는 경우가 많아, 없으면 None으로 처리
+    render_org_dashboard_sidebar(sidebar_org, None)
+
+
 try:
     if st.session_state.stage == "intro":
         render_top_spacer()
 
-        intro_map = get_current_map_image()
-        if intro_map:
-            show_map_with_fade(intro_map)
-        else:
-            st.info("맵 이미지를 추가하면 인트로 연출이 더 좋아집니다.")
-
-        st.markdown("<div style='height:10px;'></div>", unsafe_allow_html=True)
+        # ✅ 메인(인트로) 화면은 '참가자 본인 확인'에 집중합니다.
         st.title("🛡️ 2026 Compliance Adventure")
-        st.caption("Guardian Training · 컴플라이언스 테마 정복형 학습")
+        st.caption("성명 조회 → 본인 정보 확인(사번/기관) → 자동으로 모험 시작")
 
-        st.markdown(
-            """
-            <div class='card'>
-              <div class='card-title'>게임 방식</div>
-              <div>맵에서 테마를 선택 → 핵심 브리핑 학습 → 퀴즈(4지선다 + 주관식) → 정복 완료!</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
         emp_df, emp_meta_msg = load_employee_master_df()
 
         st.markdown("### 👤 참가자 확인")
@@ -3398,57 +3533,67 @@ try:
                 st.session_state.employee_lookup_modal_open = True
                 st.rerun()
 
-        selected_emp = st.session_state.get("employee_selected_record")
+                selected_emp = st.session_state.get("employee_selected_record")
         if selected_emp:
-            st.markdown("<div id='start-adventure-anchor'></div>", unsafe_allow_html=True)
-
-            # 방금 팝업에서 '이 정보로 확인'을 눌렀다면, 아래 시작 영역으로 자동 스크롤
-            if st.session_state.get('just_confirmed_employee', False):
-                st.session_state.just_confirmed_employee = False
-                try:
-                    components.html(
-                        """
-                        <script>
-                          (function() {
-                            const el = window.parent.document.getElementById('start-adventure-anchor');
-                            if (el) { el.scrollIntoView({behavior:'smooth', block:'start'}); }
-                          })();
-                        </script>
-                        """,
-                        height=0,
-                    )
-                except Exception:
-                    pass
-
-            st.markdown('### ✅ 확인된 참가자 정보')
+            st.markdown("### ✅ 확인된 참가자 정보")
             col_a, col_b, col_c = st.columns(3)
-            _render_confirm_readonly_field(col_a, '사번', selected_emp.get('employee_no', ''))
-            _render_confirm_readonly_field(col_b, '이름', selected_emp.get('name', ''))
-            _render_confirm_readonly_field(col_c, '소속 기관', selected_emp.get('organization', ''))
+            _render_confirm_readonly_field(col_a, "사번", selected_emp.get("employee_no", ""))
+            _render_confirm_readonly_field(col_b, "이름", selected_emp.get("name", ""))
+            _render_confirm_readonly_field(col_c, "소속 기관", selected_emp.get("organization", ""))
 
-            # 기관별 현황 대시보드 (HTML 미사용)
-            render_org_dashboard_main(selected_emp.get('organization', ''), emp_df)
-
-            st.markdown("<div style='height:6px;'></div>", unsafe_allow_html=True)
-            if st.button('모험 시작하기', use_container_width=True):
-                emp_no = str(selected_emp.get('employee_no', '')).strip()
-                emp_name = str(selected_emp.get('name', '')).strip()
-                emp_org = str(selected_emp.get('organization', '')).strip() or '미분류'
+            # ✅ 자동 시작: 참가자 확인이 완료되면(팝업에서 '이 정보로 확인') 즉시 모험을 시작합니다.
+            auto_start = bool(st.session_state.get("just_confirmed_employee", False))
+            if auto_start:
+                st.session_state.just_confirmed_employee = False
+                emp_no = str(selected_emp.get("employee_no", "")).strip()
+                emp_name = str(selected_emp.get("name", "")).strip()
+                emp_org = str(selected_emp.get("organization", "")).strip() or "미분류"
                 if emp_name:
-                    user_info = {'employee_no': emp_no, 'name': emp_name, 'org': emp_org}
+                    user_info = {"employee_no": emp_no, "name": emp_name, "org": emp_org}
                     hist = _summarize_user_attempts(emp_no, emp_name, emp_org)
-                    completed_attempts = int(hist.get('completed_attempts', 0) or 0)
+                    completed_attempts = int(hist.get("completed_attempts", 0) or 0)
 
                     if completed_attempts >= 3:
-                        st.error('이 참가자는 최대 참여 횟수(총 3회)를 모두 사용했습니다. 관리자에게 문의해주세요.')
+                        st.error("이 참가자는 최대 참여 횟수(총 3회)를 모두 사용했습니다. 관리자에게 문의해주세요.")
                     elif completed_attempts >= 1:
-                        _set_retry_offer(user_info, completed_attempts, context='intro')
+                        _set_retry_offer(user_info, completed_attempts, context="intro")
                         st.rerun()
                     else:
-                        st.session_state.pending_start_training = {'user_info': user_info, 'attempt_round': 1, 'skip_to_stage': 'map'}
+                        st.success("참가자 확인이 완료되었습니다. 모험을 시작합니다…")
+                        st.session_state.pending_start_training = {
+                            "user_info": user_info,
+                            "attempt_round": 1,
+                            "skip_to_stage": "map",
+                        }
                         st.rerun()
                 else:
-                    st.warning('참가자 확인 정보를 다시 선택해주세요.')
+                    st.warning("참가자 확인 정보를 다시 선택해주세요.")
+
+            # 수동 시작(예외 케이스 대비)
+            if st.button("모험 시작하기", use_container_width=True, key="intro_start_manual"):
+                emp_no = str(selected_emp.get("employee_no", "")).strip()
+                emp_name = str(selected_emp.get("name", "")).strip()
+                emp_org = str(selected_emp.get("organization", "")).strip() or "미분류"
+                if emp_name:
+                    user_info = {"employee_no": emp_no, "name": emp_name, "org": emp_org}
+                    hist = _summarize_user_attempts(emp_no, emp_name, emp_org)
+                    completed_attempts = int(hist.get("completed_attempts", 0) or 0)
+
+                    if completed_attempts >= 3:
+                        st.error("이 참가자는 최대 참여 횟수(총 3회)를 모두 사용했습니다. 관리자에게 문의해주세요.")
+                    elif completed_attempts >= 1:
+                        _set_retry_offer(user_info, completed_attempts, context="intro")
+                        st.rerun()
+                    else:
+                        st.session_state.pending_start_training = {
+                            "user_info": user_info,
+                            "attempt_round": 1,
+                            "skip_to_stage": "map",
+                        }
+                        st.rerun()
+                else:
+                    st.warning("참가자 확인 정보를 다시 선택해주세요.")
+
         render_retry_offer_box("intro")
 
     elif st.session_state.stage == "map":
