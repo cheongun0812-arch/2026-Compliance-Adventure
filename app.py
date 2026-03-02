@@ -1,4 +1,28 @@
 import streamlit as st
+
+# --- UI helpers ------------------------------------------------------------
+def st_button(label: str, *, primary: bool = False, key: str | None = None,
+              disabled: bool = False, use_container_width: bool = False) -> bool:
+    """Compatibility wrapper for st.button(type=...).
+
+    - Streamlit versions differ on whether `type=` is supported.
+    - We keep the UI intent (primary buttons for flow guidance) when available,
+      and gracefully fall back when not.
+    """
+    kwargs = dict(
+        key=key,
+        disabled=disabled,
+        use_container_width=use_container_width,
+    )
+    try:
+        if primary:
+            return st.button(label, primary=True, **kwargs)
+        return st.button(label, **kwargs)
+    except TypeError:
+        # Older Streamlit: no `type` argument
+        return st.button(label, **kwargs)
+
+# -------------------------------------------------------------------------
 from datetime import datetime
 from pathlib import Path
 import csv
@@ -461,6 +485,50 @@ div[data-testid="stToast"] * {
 [data-testid="stSidebar"] * {
     color: #EAEAEA !important;
 }
+
+/* === GOLD FLOW GUIDANCE (primary buttons) === */
+div[data-testid="stButton"] > button[kind="primary"]{
+  background: radial-gradient(120% 140% at 30% 20%, rgba(255, 245, 200, .98), rgba(250, 204, 21, .90) 45%, rgba(234, 179, 8, .88) 100%) !important;
+  border: 1px solid rgba(250, 204, 21, .55) !important;
+  color: #1A1200 !important;
+  font-weight: 900 !important;
+  box-shadow: 0 0 0 1px rgba(250,204,21,.20), 0 12px 28px rgba(250,204,21,.22), 0 0 22px rgba(250,204,21,.24) !important;
+}
+div[data-testid="stButton"] > button[kind="primary"]:hover{
+  filter: brightness(1.03) saturate(1.05);
+  box-shadow: 0 0 0 1px rgba(250,204,21,.28), 0 14px 34px rgba(250,204,21,.28), 0 0 30px rgba(250,204,21,.28) !important;
+}
+/* Ensure primary button text stays readable even under global theme overrides */
+div[data-testid="stButton"] > button[kind="primary"] *{
+  color:#1A1200 !important;
+  opacity: 1 !important;
+}
+
+/* === MAP STAGE PILLS === */
+.stage-pill{
+  padding: 10px 12px;
+  border-radius: 12px;
+  font-weight: 900;
+  text-align: center;
+  letter-spacing: .1px;
+  border: 1px solid rgba(255,255,255,.10);
+  user-select: none;
+}
+.stage-pill--current{
+  background: radial-gradient(120% 150% at 30% 20%, rgba(255, 245, 200, .98), rgba(250, 204, 21, .85) 45%, rgba(234, 179, 8, .82) 100%);
+  color: #1A1200;
+  box-shadow: 0 0 0 1px rgba(250,204,21,.22), 0 12px 26px rgba(250,204,21,.20), 0 0 26px rgba(250,204,21,.22);
+}
+.stage-pill--cleared{
+  background: rgba(30, 41, 59, .55);
+  color: #E5E7EB;
+  border-color: rgba(148, 163, 184, .22);
+}
+.stage-pill--locked{
+  background: rgba(16, 185, 129, .18);
+  color: #EAFBF1;
+  border-color: rgba(74, 222, 128, .35);
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -745,16 +813,27 @@ def _load_org_targets() -> dict:
 def compute_org_scoreboard() -> pd.DataFrame:
     """기관별 집계(1인 1레코드 최종결과 기반)
 
-    - 평균점수(%) : 참여자들의 득점률 평균
+    점수 정의(운영 정책):
+    - 원평균점수(%) : 참여자들의 득점률 평균(그대로 평균)
     - 참여율점수 : 목표 대비 참여율(%)을 점수화(5.0~10.0)
-    - 누적점수(총점) : 참여율점수 + 평균점수(%)
-      (행사 목적상 '참여 독려 + 학습 성과'를 한 지표로 랭킹화)
+    - 보정평균점수(%) : '대규모 기준 신뢰도' 보정(소규모 변동성 완화)
+      * 소규모 기관은 참여자 수가 적어 평균이 흔들릴 수 있으므로, 전사 평균을 기준으로
+        목표 인원 규모에 따라 평균점수를 보정하여 대규모 기관과 같은 수준의 신뢰도로 비교합니다.
+    - 누적점수(총점) : 참여율점수 + 보정평균점수(%)
     """
     df = _load_results_df()
+
     cols = [
-        "rank","organization","participants","target",
-        "participation_rate","participation_rate_score",
-        "avg_score_rate","cumulative_score","score_sum_rate",
+        "rank",
+        "organization",
+        "participants",
+        "target",
+        "participation_rate",
+        "participation_rate_score",
+        "raw_avg_score_rate",
+        "avg_score_rate",
+        "cumulative_score",
+        "score_sum_rate",
         "last_activity",
     ]
     if df.empty:
@@ -765,11 +844,14 @@ def compute_org_scoreboard() -> pd.DataFrame:
     df["employee_no"] = df["employee_no"].astype(str).str.strip()
     df["score_rate"] = pd.to_numeric(df["score_rate"], errors="coerce").fillna(0.0)
 
+    # 전사 평균(%) - 보정 기준
+    mu_all = float(df["score_rate"].mean()) if len(df) else 0.0
+
     g = df.groupby("organization", dropna=False).agg(
-        participants=("employee_no","nunique"),
-        avg_score_rate=("score_rate","mean"),
-        score_sum_rate=("score_rate","sum"),
-        last_activity=("ended_at","max"),
+        participants=("employee_no", "nunique"),
+        raw_avg_score_rate=("score_rate", "mean"),
+        score_sum_rate=("score_rate", "sum"),
+        last_activity=("ended_at", "max"),
     ).reset_index()
 
     # 목표 인원(기관별) 매핑
@@ -780,47 +862,68 @@ def compute_org_scoreboard() -> pd.DataFrame:
     g["participation_rate"] = np.where(
         g["target"] > 0,
         (g["participants"] / g["target"]) * 100.0,
-        np.nan
+        np.nan,
     )
     g["participation_rate_score"] = g["participation_rate"].apply(
         lambda x: _participation_rate_score(x) if pd.notna(x) else np.nan
     )
 
-    # 누적점수(총점) = 참여율점수 + 평균점수(%)
-    # - target이 없는 기관(참여율점수 NaN)은 0점으로 처리하여 평균점수만 반영되도록 함
-    g["_prs"] = pd.to_numeric(g["participation_rate_score"], errors="coerce").fillna(0.0)
-    g["_avg"] = pd.to_numeric(g["avg_score_rate"], errors="coerce").fillna(0.0)
-    g["cumulative_score"] = (g["_prs"] + g["_avg"])
+    # --- 대규모 기준 신뢰도 보정(Plan 1) ---
+    # 기준: 목표 인원 최대 기관을 '대규모 기준'으로 삼아, 목표 인원 규모가 작을수록
+    # 전사 평균(μ_all) 쪽으로 더 강하게 수축(shrink)하여 변동성을 낮춤.
+    # w_i = n_i / (n_i + k * (T_max / T_i))
+    # μ*_i = w_i * μ_i + (1 - w_i) * μ_all
+    k = 30.0  # 안정화 상수(운영 권장: 20~50). 기본 30.
+    tmax = float(g["target"].max()) if (g["target"] > 0).any() else 0.0
 
-    # 랭킹 기준: 누적점수(총점) ↓, 참여율점수 ↓, 평균점수 ↓, 참여자수 ↓
+    def _adjust_avg(row) -> float:
+        mu_i = float(row["raw_avg_score_rate"]) if pd.notna(row["raw_avg_score_rate"]) else 0.0
+        n_i = float(row["participants"]) if pd.notna(row["participants"]) else 0.0
+        t_i = float(row["target"]) if pd.notna(row["target"]) else 0.0
+        # target이 없으면 보정하지 않고 원점수 사용
+        if t_i <= 0 or tmax <= 0:
+            return mu_i
+        w = n_i / (n_i + k * (tmax / t_i))
+        return (w * mu_i) + ((1.0 - w) * mu_all)
+
+    g["avg_score_rate"] = g.apply(_adjust_avg, axis=1)
+
+    # 누적점수(총점) = 참여율점수 + 보정평균점수(%)
+    g["_prs"] = pd.to_numeric(g["participation_rate_score"], errors="coerce").fillna(0.0)
+    g["_avg_adj"] = pd.to_numeric(g["avg_score_rate"], errors="coerce").fillna(0.0)
+    g["cumulative_score"] = (g["_prs"] + g["_avg_adj"])
+
+    # 랭킹 기준: 누적점수(총점) ↓, 참여율점수 ↓, 보정평균점수 ↓, 참여자수 ↓
     g["_cum"] = pd.to_numeric(g["cumulative_score"], errors="coerce").fillna(0.0)
     g["_p"] = pd.to_numeric(g["participants"], errors="coerce").fillna(0)
     g = g.sort_values(
-        ["_cum","_prs","_avg","_p"],
-        ascending=[False, False, False, False]
+        ["_cum", "_prs", "_avg_adj", "_p"],
+        ascending=[False, False, False, False],
     ).reset_index(drop=True)
     g["rank"] = np.arange(1, len(g) + 1)
 
     # 표시용 반올림(가독성: 소수 1자리)
+    g["raw_avg_score_rate"] = g["raw_avg_score_rate"].round(1)
     g["avg_score_rate"] = g["avg_score_rate"].round(1)
     g["score_sum_rate"] = g["score_sum_rate"].round(1)
     g["participation_rate"] = g["participation_rate"].round(1)
     g["participation_rate_score"] = g["participation_rate_score"].round(1)
     g["cumulative_score"] = g["cumulative_score"].round(1)
 
-    g = g.drop(columns=["_cum","_prs","_avg","_p"])
+    g = g.drop(columns=["_cum", "_prs", "_avg_adj", "_p"])
 
     return g[cols]
-
-
 def render_org_electronic_board_sidebar():
     """좌측 사이드바 전광판(기관 현황).
 
-    - 랭킹은 누적점수(총점)=참여율점수+평균점수(%) 기준
-    - 표시 포맷: 소수 1자리(%, 점수), 인원은 정수
+    사용자 요청 반영:
+    - 표는 '순위 / 기관명 / 점수(평균점수+참여율점수)' 3컬럼만 노출 (전광판형)
+    - 점수 = 누적점수(총점) = 참여율점수 + 평균점수(%)
+    - 숫자 표기는 1자리 소수로 고정(가독성)
+    - 메인 이미지 영역과 수평 맞춤을 위해 상단 여백을 약간 부여(HTML 미사용)
     """
-    # 메인 상단 이미지/헤더와 시각적 높이를 맞추기 위한 여백(HTML 미사용)
-    for _ in range(5):
+    # 메인 이미지/타이틀 영역과 시각적 높이를 맞추기 위한 여백(HTML 미사용)
+    for _ in range(7):
         st.sidebar.write("")
 
     st.sidebar.markdown("### 🏢 기관 전광판")
@@ -830,34 +933,14 @@ def render_org_electronic_board_sidebar():
         st.sidebar.info("아직 집계된 최종 결과가 없습니다.")
         return
 
-    # Top 기관 표(사이드바 폭 고려: 8개)
-    top = sb.head(8).copy()
-    disp = pd.DataFrame()
-    disp["순위"] = top["rank"].astype(int).astype(str)
-    disp["기관"] = top["organization"].astype(str)
+    top = sb.head(10).copy()
 
-    disp["참여자(명)"] = top["participants"].fillna(0).astype(int).astype(str)
-    disp["목표(명)"] = top["target"].fillna(0).astype(int).astype(str)
-
-    disp["참여율(%)"] = top["participation_rate"].apply(
-        lambda x: "-" if pd.isna(x) else f"{float(x):.1f}%"
-    )
-    disp["참여율점수"] = top["participation_rate_score"].apply(
-        lambda x: "-" if pd.isna(x) else f"{float(x):.1f}"
-    )
-    disp["평균점수(%)"] = top["avg_score_rate"].apply(
-        lambda x: f"{float(x):.1f}%"
-    )
-    # 혼동 방지용: 참여자 점수율 합계(참고)
-    disp["점수합계(%)"] = top["score_sum_rate"].apply(
-        lambda x: f"{float(x):.1f}"
-    )
-    # 핵심: 누적점수(총점) = 참여율점수 + 평균점수(%)
-    disp["누적점수"] = top["cumulative_score"].apply(
-        lambda x: f"{float(x):.1f}"
-    )
-
-    st.sidebar.table(disp)
+    board = pd.DataFrame({
+        "순위": top["rank"].astype(int).astype(str),
+        "기관명": top["organization"].astype(str),
+        "점수(평균점수+참여율점수)": top["cumulative_score"].apply(lambda x: f"{float(x):.1f}"),
+    })
+    st.sidebar.table(board)
 
     # 내 기관 요약(참가자 확인 후)
     u = st.session_state.get("user_info") or {}
@@ -882,227 +965,6 @@ def render_org_electronic_board_sidebar():
             st.sidebar.metric("평균점수(%)", f"{float(r.get('avg_score_rate', 0.0)):.1f}%")
             st.sidebar.metric("누적점수(총점)", f"{float(r.get('cumulative_score', 0.0)):.1f}")
 
-
-MAP_STAGE_IMAGES = {
-    0: ASSET_DIR / "world_map_0.png",
-    1: ASSET_DIR / "world_map_1.png",
-    2: ASSET_DIR / "world_map_2.png",
-    3: ASSET_DIR / "world_map_3.png",
-}
-DEFAULT_MAP_IMAGE = ASSET_DIR / "world_map.png"  # 선택 (fallback)
-MASTER_IMAGE = ASSET_DIR / "master.png"
-ENDING_IMAGE_CANDIDATE_NAMES = [
-    "ending_final.png", "final_stage.png", "ending.png", "final.png",
-    "completion_final.png", "guardian_final.png"
-]
-
-# --- 관리자 통계/채점 기준 ---
-TEXT_CORRECT_THRESHOLD = 0.7  # 주관식 점수율 70% 이상이면 '정답'으로 집계
-
-
-THEME_ICONS = {
-    "subcontracting": "🚜",
-    "security": "🔐",
-    "fairtrade": "🛡️",
-}
-
-
-EMPLOYEE_MASTER_CANDIDATE_NAMES = [
-    "employee_master.xlsx", "employee_master.csv",
-    "employee_list.xlsx", "employee_list.csv",
-    "employees.xlsx", "employees.csv",
-    "직원명단.xlsx", "직원명단.csv",
-    "사번명단.xlsx", "사번명단.csv",
-    "임직원명단.xlsx", "임직원명단.csv",
-]
-
-EMPLOYEE_COL_ALIASES = {
-    "employee_no": ["employee_no", "emp_no", "empid", "employeeid", "employeenumber", "사번", "직원번호", "사원번호", "임직원번호", "직원코드", "사번코드"],
-    "name": ["name", "employee_name", "fullname", "성명", "이름", "직원명", "사원명"],
-    "organization": ["organization", "org", "department", "dept", "소속", "소속기관", "기관", "조직", "본부", "부서"],
-}
-
-# 구버전 단계별 파일명도 fallback 지원 (기존 운영 호환)
-
-ADMIN_PASSWORD = os.environ.get("COMPLIANCE_ADMIN_PASSWORD", "admin2026")
-
-# =========================================================
-# 3) 콘텐츠 데이터 (브리핑 + 퀴즈)
-#    테마당: 4지선다 2문항 + 주관식 1문항
-# =========================================================
-SCENARIO_ORDER = ["subcontracting", "security", "fairtrade"]
-
-SCENARIOS = {'subcontracting': {'title': '🚜 하도급의 계곡',
-                    'briefing': {'title': '하도급 실무 핵심 원칙 브리핑',
-                                 'summary': '하도급 업무의 3대 원칙은 <span class="gold">① 착공 전 서면(발주서·계약서) 발급</span>, <span class="gold">② 변경 발생 즉시 변경합의서/메일로 근거 문서화</span>, <span class="gold">③ 감액·지급지연은 사유·산정근거·협의내용을 서면으로 확정</span>입니다. 일정이 급할수록 “먼저 작업”이 가장 큰 리스크가 되며, 분쟁·제재 대응에서 <span class="gold">기록(서면)</span>이 곧 방어수단입니다.',
-                                 'keywords': ['하도급법', '서면발급 의무', '변경계약 문서화', '부당감액 금지'],
-                                 'red_flags': ['“먼저 작업부터, 계약서는 나중에”처럼 착공 전 서면을 미루는 지시',
-                                               '구두로 범위/단가를 바꾸고 메일·변경합의서 없이 진행',
-                                               '품질/납기 이슈 근거 없이 일괄 감액 또는 지급 보류'],
-                                 'checklist': ['<span class="gold">착공 전</span> 발주서/계약서(범위·단가·납기) 발급 여부 확인',
-                                               '범위·단가 변경 시 <span class="gold">변경사유·금액·승인권자</span>를 문서로 남기기(메일/합의서)',
-                                               '검수/납품/하자 근거자료를 <span class="gold">지급 판단 문서</span>와 연결(증빙 첨부)',
-                                               '감액 검토 시 <span class="gold">정당 사유·산정근거·협의 기록</span>을 선확보 후 처리']},
-                    'quiz': [{'type': 'mcq',
-                              'code': 'SC-1',
-                              'score': 35,
-                              'question': '하도급 업무에서 착공 전 가장 먼저 확인해야 할 항목은 무엇인가요?',
-                              'options': ['서면 계약(발주서 포함) 발급 여부와 핵심 조건 명시 여부',
-                                          '현장 인력 배치 완료 여부',
-                                          '협력사 담당자 연락처 확보 여부',
-                                          '작업 속도와 긴급성'],
-                              'answer': 0,
-                              'choice_feedback': ['정답입니다. 하도급법 분쟁의 출발점은 서면 미발급/조건 불명확인 경우가 많습니다.',
-                                                  '인력 배치는 중요하지만, 계약 근거가 먼저 정리되어야 분쟁을 줄일 수 있습니다.',
-                                                  '연락체계는 보조 요소이며, 계약 조건 확정이 우선입니다.',
-                                                  '긴급한 일정이라도 법적 필수 절차(서면)는 생략할 수 없습니다.'],
-                              'explain': '하도급 실무의 기본은 “서면 선행”입니다. 착공 전 발주서·계약서에 작업범위, 단가, 납기, 검수 기준 등이 명시되어야 이후 '
-                                         '비용/품질/납기 분쟁을 예방할 수 있습니다.',
-                              'wrong_extra': '실무에서는 “급해서 먼저”라는 말이 자주 나오지만, 서면 누락은 추후 부당감액·책임공방의 핵심 쟁점이 됩니다.'},
-                             {'type': 'mcq',
-                              'code': 'SC-2',
-                              'score': 35,
-                              'question': '작업 도중 발주 범위가 늘어나 단가 조정이 필요한 상황입니다. 가장 적절한 조치는 무엇인가요?',
-                              'options': ['변경 내용을 메신저로만 남기고 기존 계약대로 정산한다',
-                                          '변경 범위·단가·납기를 서면(변경합의/발주서)으로 확정 후 진행한다',
-                                          '협력사에 먼저 진행시키고 월말에 내부 기준으로 감액 정산한다',
-                                          '구두 합의만 되면 증빙 없이도 충분하다'],
-                              'answer': 1,
-                              'choice_feedback': ['메신저 기록은 보조자료일 뿐, 변경계약의 핵심 증빙으로는 부족할 수 있습니다.',
-                                                  '정답입니다. 변경계약은 범위·금액·납기·책임을 서면으로 정리해야 분쟁을 줄일 수 있습니다.',
-                                                  '사후 감액 정산은 부당감액 분쟁으로 이어질 가능성이 높습니다.',
-                                                  '구두 합의는 해석이 갈리기 쉬워 분쟁 시 입증이 어렵습니다.'],
-                              'explain': '하도급 변경관리에서는 “변경 전 합의·변경 후 집행” 원칙이 안전합니다. 변경 범위와 단가를 문서화해 승인권자까지 명확히 해야 지급·검수 '
-                                         '단계에서 충돌을 줄일 수 있습니다.',
-                              'wrong_extra': '분쟁사례에서는 “현장 구두지시”가 있었는지, 누가 승인했는지가 핵심 쟁점이 됩니다. 문서화가 가장 강력한 예방책입니다.'},
-                             {'type': 'text',
-                              'code': 'SC-3',
-                              'score': 30,
-                              'question': '나는 협력사 정산을 검토 중인데, 검수결과나 하자 근거 없이 대금을 일괄 감액하라는 요청을 받았습니다. 이 상황에서 내가 어떻게 처리할지 짧게 작성해보세요. (원칙 + 근거 확인 + 대안 포함)',
-                              'sample_answer': '정당한 사유와 객관적 근거 없이 하도급대금을 바로 감액하지 않겠습니다. 먼저 검수결과·하자 여부·산정 근거를 확인하고, 조정이 필요하면 협의 내용과 정산 기준을 서면으로 남겨 처리하겠습니다.',
-                              'model_answer': '예시 답변: “하도급대금은 정당한 사유와 객관적 산정 근거 없이 일괄 감액하면 분쟁과 법 위반 소지가 있으므로 바로 감액 처리하지 않겠습니다. 우선 검수결과와 하자 귀책, 감액 산정 근거를 확인하고, 조정이 필요하면 협의 내용과 정산 기준을 서면으로 남긴 뒤 처리하겠습니다.”',
-                              'rubric_keywords': {'원칙 설명': {'keywords': ['하도급대금', '감액', '정당한 사유', '부당', '일괄 감액', '바로 감액하지'], 'weight': 3, 'min_hits': 2},
-                                               '근거 확인': {'keywords': ['검수', '하자', '귀책', '산정', '근거', '증빙'], 'weight': 4, 'min_hits': 2},
-                                               '처리/기록 조치': {'keywords': ['협의', '서면', '기록', '문서', '정산 기준', '확인 후'], 'weight': 3, 'min_hits': 2}}}]},
- 'security': {'title': '🔐 정보보안의 요새',
-              'briefing': {'title': '정보보안 기본 원칙 브리핑',
-                           'summary': '정보보안의 기본 원칙은 <span class="gold">최소권한(Need-to-know)</span>, <span class="gold">데이터 분류·암호화</span>, <span class="gold">접근기록(로그)과 이상징후 모니터링</span>입니다. 업무 편의로 권한을 넓히거나 자료를 개인 저장소로 옮기는 순간, 사고 발생 시 책임이 개인에게 집중될 수 있으니 <span class="gold">반출·공유·권한</span>은 반드시 절차대로 처리하세요.',
-                           'keywords': ['피싱 메일', '계정정보 보호', '사고 즉시보고', '개인정보'],
-                           'red_flags': ['긴급결재·택배조회 등을 빙자한 링크 클릭 유도 메일',
-                                         '비밀번호·OTP·인증코드를 메신저/메일로 요청하는 행위',
-                                         '이상 로그인/파일 암호화 징후를 발견했는데 개인적으로만 처리'],
-                           'checklist': ['권한 부여/변경 시 <span class="gold">최소권한</span> 원칙 점검(불필요 권한 즉시 회수)',
-                                               '대외 공유 전 <span class="gold">대상 데이터 등급</span> 확인 및 마스킹/암호화 적용',
-                                               '개인 메일·메신저·개인 클라우드로 업무자료 이동 금지(필요 시 <span class="gold">승인된 채널</span> 사용)',
-                                               'USB/외장매체 사용 시 <span class="gold">반출 승인·기록</span> 및 사용 후 즉시 삭제/반납']},
-              'quiz': [{'type': 'mcq',
-                        'code': 'IS-1',
-                        'score': 35,
-                        'question': '다음 중 피싱 메일 가능성이 가장 높은 징후는 무엇인가요?',
-                        'options': ['회사 공지 메일에 사내 포털 링크가 포함되어 있다',
-                                    '발신자 주소가 유사하지만 다른 도메인이고, 압축파일 실행을 요구한다',
-                                    '회의 일정 안내 메일에 회의실 정보가 포함되어 있다',
-                                    '업무 메일에 결재 문서 PDF가 첨부되어 있다'],
-                        'answer': 1,
-                        'choice_feedback': ['링크 자체만으로는 피싱 여부를 단정할 수 없고, 도메인·URL 검증이 필요합니다.',
-                                            '정답입니다. 유사 도메인 + 실행파일/압축파일 유도는 대표적인 피싱 징후입니다.',
-                                            '일반적인 업무 안내 형태로, 추가 검증 요소가 더 필요합니다.',
-                                            'PDF 첨부만으로는 판단하기 어렵고 발신자/맥락 확인이 먼저입니다.'],
-                        'explain': '피싱 메일은 실제 조직명을 흉내 낸 유사 도메인, 긴급한 표현, 실행형 첨부파일 요구가 자주 나타납니다. 특히 압축파일/실행파일은 악성코드 감염의 '
-                                   '주요 경로입니다.',
-                        'wrong_extra': '“바빠서 일단 열어보자”가 사고의 출발점이 됩니다. 의심되면 클릭 전에 보안팀 확인이 우선입니다.'},
-                       {'type': 'mcq',
-                        'code': 'IS-2',
-                        'score': 35,
-                        'question': '직원이 피싱 페이지에 계정정보를 입력한 사실을 뒤늦게 알게 되었습니다. 가장 우선해야 할 조치는?',
-                        'options': ['본인 PC만 재부팅하고 아무에게도 알리지 않는다',
-                                    '다음날 출근 후 천천히 비밀번호를 바꾼다',
-                                    '즉시 비밀번호 변경, 접속 차단 요청, 보안담당자/헬프데스크에 사고 보고',
-                                    '메일을 삭제했으니 추가 조치는 필요 없다'],
-                        'answer': 2,
-                        'choice_feedback': ['재부팅만으로는 계정 탈취·추가 접근을 막을 수 없습니다.',
-                                            '지연 대응은 피해를 키울 수 있습니다. 즉시 조치가 중요합니다.',
-                                            '정답입니다. 계정보호 조치와 사고보고를 동시에 진행해야 확산을 줄일 수 있습니다.',
-                                            '삭제는 흔적 제거가 아니며, 이미 입력한 정보는 유출됐을 수 있습니다.'],
-                        'explain': '계정정보 입력 사고는 “즉시 비밀번호 변경 + 보안담당 통보 + 추가 인증 점검”이 기본입니다. 초기 10~30분 대응이 피해 규모를 크게 '
-                                   '좌우합니다.',
-                        'wrong_extra': '실제 사고 대응에서 보고 지연은 추가 접속·권한남용을 허용해 피해를 확대시키는 원인이 됩니다.'},
-                       {'type': 'text',
-                        'code': 'IS-3',
-                        'score': 30,
-                        'question': '나는 의심 메일 링크를 클릭한 뒤 계정정보 입력 가능성을 확인했습니다. 이 상황에서 내가 즉시 해야 할 조치와 보고 방향을 짧게 작성해보세요. (상황 + 즉시 조치 + 보고/요청 포함)',
-                        'sample_answer': '의심 링크 클릭으로 계정정보 노출 가능성이 있어 즉시 비밀번호를 변경하고 추가 로그인 여부를 확인하겠습니다. 동시에 보안담당자와 헬프데스크에 사고 사실을 보고하고 접속기록 점검을 요청하겠습니다.',
-                        'model_answer': '예시 답변: “의심 메일 링크 클릭으로 계정정보가 노출됐을 가능성이 있어 즉시 비밀번호를 변경하고 필요한 경우 로그아웃/차단 조치를 진행하겠습니다. 이후 보안담당자와 헬프데스크에 사고 사실을 바로 보고하고, 계정 접속기록 점검과 추가 대응 안내를 요청하겠습니다.”',
-                        'rubric_keywords': {'사고 상황 인지': {'keywords': ['의심', '메일', '링크', '계정', '입력', '노출'], 'weight': 2, 'min_hits': 2},
-                                            '즉시 보호 조치': {'keywords': ['비밀번호', '변경', '차단', '로그아웃', 'OTP', '인증'], 'weight': 4, 'min_hits': 2},
-                                            '보고/점검 요청': {'keywords': ['보고', '보안담당', '헬프데스크', '접속기록', '점검', '요청'], 'weight': 4, 'min_hits': 2}}}]},
- 'fairtrade': {'title': '🛡️ 공정거래의 성',
-               'briefing': {'title': '공정거래·청렴 기본 원칙 브리핑',
-                            'summary': '공정거래에서 가장 위험한 순간은 <span class="gold">경쟁사와의 정보교환</span>과 <span class="gold">거래조건(가격·수수료·마진·물량) 협의</span>입니다. 회의·세미나·협회 활동에서도 가격/물량/전략이 오가면 즉시 중단·이탈하고, <span class="gold">사전 가이드(법무/컴플라이언스)</span>에 따라 기록을 남겨야 합니다. 거래상 지위 남용(불공정조건 강요)도 분쟁·제재의 단골 이슈입니다.',
-                            'keywords': ['청탁금지법', '이해충돌 예방', '금품·편의 거절', '윤리보고'],
-                            'red_flags': ['협력사/거래처가 식사·상품권·편의를 반복적으로 제공',
-                                          '평가/입찰 담당자에게 결과를 미리 알려달라는 요청',
-                                          '지인·퇴직자 네트워크를 통한 우회 청탁 제안'],
-                            'checklist': ['경쟁사 접촉/회의 전 <span class="gold">아젠다 사전 확인</span> 및 민감 주제(가격·물량·입찰) 금지 안내',
-                                               '민감 정보가 나오면 <span class="gold">즉시 중단</span>하고 회의 이탈/반대 의사 표명 기록',
-                                               '거래조건 변경 시 <span class="gold">근거(원가·서비스 범위)</span>를 문서화하고 표준계약/가이드 준수',
-                                               '리베이트/접대/편의 제공 요청 발생 시 <span class="gold">즉시 신고</span> 및 증빙 보존']},
-               'quiz': [{'type': 'mcq',
-                         'code': 'FT-1',
-                         'score': 35,
-                         'question': '평가를 앞둔 협력사가 “작은 감사 표시”라며 상품권을 전달하려고 합니다. 가장 적절한 대응은?',
-                         'options': ['금액이 작으면 받고 넘어간다',
-                                     '개인적으로 거절하고 기록은 남기지 않는다',
-                                     '정중히 거절하고, 회사 기준에 따라 상급자/윤리채널에 공유한다',
-                                     '평가가 끝난 뒤 받겠다고 안내한다'],
-                         'answer': 2,
-                         'choice_feedback': ['금액과 무관하게 이해관계 상황에서는 수수가 리스크가 됩니다.',
-                                             '거절은 좋지만 기록·공유가 없으면 반복 제안이나 오해를 막기 어렵습니다.',
-                                             '정답입니다. 거절 + 보고(기록)가 청렴 리스크 관리의 기본입니다.',
-                                             '평가 이후라도 이해관계가 남아 있을 수 있어 부적절합니다.'],
-                         'explain': '이해관계자 금품·편의 제공은 금액보다 상황과 직무 관련성이 중요합니다. 실무에서는 수수 자체를 피하고, 제안 사실을 기록/공유해 재발과 오해를 '
-                                    '예방해야 합니다.',
-                         'wrong_extra': '분쟁·감사 시에는 “받았는지”뿐 아니라 “제안이 있었을 때 회사가 어떻게 대응했는지”도 중요하게 확인됩니다.'},
-                        {'type': 'mcq',
-                         'code': 'FT-2',
-                         'score': 35,
-                         'question': '입찰 준비 중 거래처가 “평가 기준과 경쟁사 상황을 조금만 알려달라”고 요청했습니다. 가장 적절한 답변은?',
-                         'options': ['관계 유지를 위해 구두로 일부 힌트만 준다',
-                                     '공식 공지된 범위만 안내하고, 추가 문의는 공식 절차로 요청하도록 한다',
-                                     '비공식 메신저로 평가 일정만 알려준다',
-                                     '퇴근 후 사적으로 만나 설명한다'],
-                         'answer': 1,
-                         'choice_feedback': ['구두 힌트도 정보 비대칭/공정성 훼손 문제가 발생할 수 있습니다.',
-                                             '정답입니다. 공개 가능한 정보만 동일하게 제공하고, 나머지는 공식 채널로 통제해야 합니다.',
-                                             '비공식 전달은 기록이 남지 않아 감사 대응이 어렵습니다.',
-                                             '사적 접촉은 오해와 청탁 리스크를 키웁니다.'],
-                         'explain': '입찰·평가 정보는 공정성 확보가 핵심입니다. 모든 거래처에 동일한 기준으로 공개하고, 비공개 정보는 공유하지 않는 것이 원칙입니다.',
-                         'wrong_extra': '공정거래·청렴 이슈는 실제 정보 유출뿐 아니라 “특정 업체만 더 알았는가”라는 절차적 공정성 문제로도 확산됩니다.'},
-                        {'type': 'text',
-                         'code': 'FT-3',
-                         'score': 30,
-                         'question': '나는 입찰 준비 중 거래처로부터 평가 기준 세부내용이나 경쟁사 관련 정보를 알려 달라는 요청을 받았습니다. 이 상황에서 내가 원칙을 지키며 어떻게 대응할지 짧게 작성해보세요. (공정성 원칙 + 거절 + 공식 채널 안내 포함)',
-                         'sample_answer': '평가 관련 정보는 공정성을 위해 공개된 범위에서만 안내하겠습니다. 추가 문의는 공식 질의 채널로 접수하도록 안내하고 동일 기준으로 회신되도록 하겠습니다.',
-                         'model_answer': '예시 답변: “입찰/평가 정보는 공정성과 동일기회 원칙에 따라 공개된 내용만 안내하겠습니다. 비공개 정보나 경쟁사 관련 내용은 제공하지 않고, 추가 문의는 공식 질의 채널로 접수하도록 안내해 모든 업체에 동일 기준으로 회신되도록 처리하겠습니다.”',
-                         'rubric_keywords': {'공정성 원칙': {'keywords': ['공정', '동일', '공개', '원칙', '기준'], 'weight': 3, 'min_hits': 2},
-                                             '비공개 정보 거절': {'keywords': ['비공개', '경쟁사', '제공하지', '어렵', '불가', '거절'], 'weight': 4, 'min_hits': 2},
-                                             '공식 채널 안내': {'keywords': ['공식', '질의', '채널', '접수', '회신', '동일 기준'], 'weight': 3, 'min_hits': 2}}}]}}
-
-MCQ_SCORE = 10
-TEXT_SCORE = 10
-PARTICIPATION_SCORE = 10
-
-# 모든 테마에 동일 배점 적용 (객관식 10점 × 6문항, 주관식 10점 × 3문항)
-for _m in SCENARIOS.values():
-    for _q in _m.get("quiz", []):
-        _q["score"] = MCQ_SCORE if _q.get("type") == "mcq" else TEXT_SCORE
-
-THEME_TOTAL_SCORE = sum(q.get("score", 0) for q in SCENARIOS[SCENARIO_ORDER[0]]["quiz"]) if SCENARIO_ORDER else 0
-TOTAL_SCORE = sum(sum(q.get("score", 0) for q in SCENARIOS[m]["quiz"]) for m in SCENARIO_ORDER) + PARTICIPATION_SCORE
-
-# =========================================================
-# 4) 상태 관리
-# =========================================================
 def init_state():
     defaults = {
         "stage": "intro",  # intro -> map -> briefing -> quiz -> ending
@@ -2521,7 +2383,7 @@ def render_admin_page():
         return
 
     st.success("관리자 인증 완료")
-    c1, c2, c3 = st.columns([1,1,1])
+    c1, c2, c3 = st.columns([1, 1, 1])
     with c1:
         if st.button("🗺️ 맵으로 돌아가기", use_container_width=True):
             st.session_state.stage = "map" if st.session_state.get("user_info") else "intro"
@@ -2535,7 +2397,6 @@ def render_admin_page():
             st.session_state.admin_authed = False
             st.rerun()
 
-    
     tab_org, tab_log = st.tabs(["🏢 기관 전광판", "📄 최종 결과 로그"])
 
     with tab_org:
@@ -2543,17 +2404,49 @@ def render_admin_page():
         if sb.empty:
             st.info("아직 집계된 최종 결과가 없습니다.")
         else:
-            st.subheader("기관별 참여·점수 현황")
-            st.dataframe(
-                sb.rename(columns={
-                    "rank":"순위","organization":"기관","participants":"참여자(명)","target":"목표(명)",
-                    "participation_rate":"참여율(%)","participation_rate_score":"참여율점수",
-                    "avg_score_rate":"평균점수(%)","cumulative_score":"누적점수(=참여율점수+평균점수)","score_sum_rate":"점수합계(%)","last_activity":"최근 종료"
-                }),
-                use_container_width=True,
-                hide_index=True,
-            )
-            st.caption("※ 참여율점수는 목표 대비 참여율(%)을 기준으로 산정됩니다. org_targets.csv가 없으면 참여율 관련 값은 비어 있을 수 있습니다.")
+            st.subheader("기관 전광판(랭킹)")
+            st.info("기관 점수는 참여율과 평균 성취도로 산정합니다. 다만 소규모 기관은 참여자 수가 적어 평균점수의 변동성이 크므로, 전사 평균을 기준으로 대상자 수 규모에 따라 평균점수를 보정하여 대규모 기관과 동일한 신뢰도 수준에서 공정 비교합니다.")
+            # 사용자 요청 포맷/조건 반영:
+            # 순위, 기관, 대상(명)=target, 참여자(명), 참여율(%), 참여율점수, 평균점수, 누적점수(=참여율점수+평균점수), 점수합계(%), 최종 업데이트 시간
+            view = sb.copy()
+            view = view.rename(columns={
+                "rank": "순위",
+                "organization": "기관",
+                "target": "대상(명)",
+                "participants": "참여자(명)",
+                "participation_rate": "참여율(%)",
+                "participation_rate_score": "참여율점수",
+                "avg_score_rate": "보정평균점수",
+                # raw_avg_score_rate는 혼동 방지를 위해 관리자 화면 기본 표에서는 숨김(필요 시 추가 노출 가능)
+
+                "cumulative_score": "누적점수(=참여율점수+보정평균점수)",
+                "score_sum_rate": "점수합계(%)",
+                "last_activity": "최종 업데이트 시간",
+            })
+
+            # 컬럼 순서 고정
+            col_order = [
+                "순위", "기관", "대상(명)", "참여자(명)",
+                "참여율(%)", "참여율점수", "보정평균점수",
+                "누적점수(=참여율점수+보정평균점수)", "점수합계(%)", "최종 업데이트 시간",
+            ]
+            view = view[col_order]
+
+            # 가독성: 소수 1자리 고정(표시)
+            def _fmt1(x):
+                try:
+                    return f"{float(x):.1f}"
+                except Exception:
+                    return "-"
+
+            view["참여율(%)"] = view["참여율(%)"].apply(lambda x: "-" if pd.isna(x) else f"{float(x):.1f}")
+            view["참여율점수"] = view["참여율점수"].apply(lambda x: "-" if pd.isna(x) else _fmt1(x))
+            view["평균점수"] = view["평균점수"].apply(_fmt1)
+            view["누적점수(=참여율점수+평균점수)"] = view["누적점수(=참여율점수+평균점수)"].apply(_fmt1)
+            view["점수합계(%)"] = view["점수합계(%)"].apply(_fmt1)
+
+            st.dataframe(view, use_container_width=True, hide_index=True)
+            st.caption("※ 누적점수는 '참여율점수 + 평균점수'로 계산되며, 순위는 누적점수 기준 내림차순입니다.")
 
     with tab_log:
         df = _load_results_df()
@@ -2562,10 +2455,17 @@ def render_admin_page():
         else:
             st.subheader("참가자 최종 결과 (1인 1레코드)")
             show = df.rename(columns={
-                "employee_no":"사번","name":"이름","organization":"소속기관",
-                "participated_at":"참여시각","ended_at":"종료시각","duration_sec":"참여시간(초)",
-                "final_score":"최종점수","score_rate":"득점률(%)","grade":"등급",
-                "training_attempt_id":"시도ID","attempt_round":"회차"
+                "employee_no": "사번",
+                "name": "이름",
+                "organization": "소속기관",
+                "participated_at": "참여시각",
+                "ended_at": "종료시각",
+                "duration_sec": "참여시간(초)",
+                "final_score": "최종점수",
+                "score_rate": "득점률(%)",
+                "grade": "등급",
+                "training_attempt_id": "시도ID",
+                "attempt_round": "회차",
             })
             st.dataframe(show, use_container_width=True, hide_index=True)
             st.download_button(
@@ -2575,8 +2475,6 @@ def render_admin_page():
                 mime="text/csv",
                 use_container_width=True,
             )
-
-
 
 def render_admin_question_stats():
     st.markdown("### 🛠 관리자용 문항별 정답률 통계")
@@ -2764,7 +2662,17 @@ def render_guardian_map():
                 txt = f"🔒 {title}"
         status_labels.append(txt)
 
-    st.caption(" · ".join(status_labels))
+    cols = st.columns(len(status_labels), gap="small")
+    for col, txt in zip(cols, status_labels):
+        # 상태: ✅(완료)=어두운 박스, 🟡(진행 가능/현재)=골드 블러, 🔒(잠김)=그린 박스
+        if txt.startswith("✅"):
+            cls = "stage-pill stage-pill--cleared"
+        elif txt.startswith("🟡"):
+            cls = "stage-pill stage-pill--current"
+        else:
+            cls = "stage-pill stage-pill--locked"
+        with col:
+            st.markdown(f"<div class='{cls}'>"+html.escape(txt)+"</div>", unsafe_allow_html=True)
 
 
 def render_briefing(m_key: str):
@@ -2817,7 +2725,7 @@ def render_briefing(m_key: str):
     st.markdown("<div class='brief-actions-wrap'></div>", unsafe_allow_html=True)
     c1, c2 = st.columns([1, 1], gap='large')
     with c1:
-        if st.button("📝 퀴즈 시작", use_container_width=True):
+        if st_button("📝 퀴즈 시작", use_container_width=True, primary=True):
             st.session_state.stage = "quiz"
             st.rerun()
     with c2:
@@ -2905,7 +2813,7 @@ def render_mcq_question(m_key: str, q_idx: int, q_data: dict):
         key=f"radio_{m_key}_{q_idx}",
     )
 
-    if st.button("제출하기", key=f"submit_mcq_{m_key}_{q_idx}", use_container_width=True):
+    if st_button("제출하기", key=f"submit_mcq_{m_key}_{q_idx}", use_container_width=True, primary=True):
         is_correct = selected == q_data["answer"]
         awarded = q_data["score"] if is_correct else 0
         st.session_state.attempt_counts[m_key] = st.session_state.attempt_counts.get(m_key, 0) + 1
@@ -3042,7 +2950,7 @@ def render_text_question(m_key: str, q_idx: int, q_data: dict):
         placeholder=(sample_answer if sample_answer else "예: 원칙을 설명하고, 가능한 대안(보고/확인/절차)을 함께 적어보세요."),
     )
 
-    if st.button("제출하기", key=f"submit_text_{m_key}_{q_idx}", use_container_width=True):
+    if st_button("제출하기", key=f"submit_text_{m_key}_{q_idx}", use_container_width=True, primary=True):
         if is_near_copy_answer(answer_text, q_data.get("sample_answer", ""), q_data.get("model_answer", "")):
             st.warning("예시/모범답안 문장을 그대로 복사한 답안은 제출할 수 없습니다. 같은 뜻이어도 본인 표현으로 바꿔 작성해주세요.")
             return
@@ -3104,7 +3012,7 @@ def render_quiz_navigation_controls(m_key: str):
             st.rerun()
     with c2:
         if idx < total_q - 1:
-            if st.button("다음 문제 ▶", key=f"nav_next_{m_key}_{idx}", use_container_width=True, disabled=(not current_submitted)):
+            if st_button("다음 문제 ▶", key=f"nav_next_{m_key}_{idx}", use_container_width=True, primary=True, disabled=(not current_submitted)):
                 progress["current_idx"] = min(total_q - 1, idx + 1)
                 st.rerun()
         else:
@@ -3222,10 +3130,9 @@ if pending:
     )
     st.rerun()
 with st.sidebar:
-    render_org_electronic_board_sidebar()
-
-    st.markdown("---")
-    st.caption("관리자")
+    # 사용자 요청: 사이드바에는 '관리자 대시보드'만 노출 (기관 전광판은 관리자 대시보드에서만 확인)
+    for _ in range(6):
+        st.write("")
     if st.button("🔐 관리자 대시보드", use_container_width=True):
         st.session_state.stage = "admin"
         st.rerun()
@@ -3530,7 +3437,7 @@ try:
         st.markdown("<div class='brief-actions-wrap'></div>", unsafe_allow_html=True)
         c1, c2 = st.columns([1, 1], gap='large')
         with c1:
-            if st.button("✅ 최종 제출(Submit)", use_container_width=True):
+            if st_button("✅ 최종 제출(Submit)", use_container_width=True, primary=True):
                 # Final results are persisted ONLY when the learner explicitly submits.
                 save_final_result_if_needed(force=True)
                 reset_participant_to_intro()
