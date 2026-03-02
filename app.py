@@ -1042,6 +1042,7 @@ def init_state():
         "attempt_history": [],
         "training_attempt_id": "",
         "training_attempt_round": 1,
+        "challenge_used": False,
         "show_conquer_fx": False,
         "map_fx_done": False,
         "map_celebrate_until": 0.0,
@@ -3116,6 +3117,14 @@ def render_quiz(m_key: str):
 # =========================================================
 init_state()
 
+# Ensure result/log schema files are created once after deployment (prevents missing counts/records)
+try:
+    _ensure_results_file()
+    _ensure_log_schema_file()
+except Exception:
+    # Do not block the app if the filesystem is read-only; we'll show a gentle warning later.
+    pass
+
 # --- 스크롤 위치 초기화: 화면(stage) 전환 시 상단으로 이동 ---
 _prev = st.session_state.get('_prev_stage')
 _cur = st.session_state.get('stage', 'intro')
@@ -3450,8 +3459,14 @@ try:
                 save_final_result_if_needed(force=True)
                 reset_participant_to_intro()
         with c2:
-            if st.button("🔄 다시 도전(Challenge again)", use_container_width=True):
+            challenge_used = bool(st.session_state.get("challenge_used", False))
+            # Allow only ONE re-challenge per participant session. After re-challenge, disable this button.
+            if challenge_used:
+                st.caption("재도전은 1회만 가능합니다. 최종 제출로 완료를 확정해 주세요.")
+            if st.button("🔄 다시 도전(Challenge again)", use_container_width=True, disabled=challenge_used):
                 # Restart from Stage 1 (first mission briefing) WITHOUT persisting any final result.
+                # Mark re-challenge consumed (1 game + 1 re-challenge).
+                st.session_state["challenge_used"] = True
                 u = st.session_state.get("user_info", {}) or {}
                 emp_name = str(u.get("name", "")).strip()
                 if not emp_name:
