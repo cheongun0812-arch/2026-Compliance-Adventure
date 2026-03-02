@@ -743,9 +743,23 @@ def _load_org_targets() -> dict:
     return out
 
 def compute_org_scoreboard() -> pd.DataFrame:
+    """기관별 집계(1인 1레코드 최종결과 기반)
+
+    - 평균점수(%) : 참여자들의 득점률 평균
+    - 참여율점수 : 목표 대비 참여율(%)을 점수화(5.0~10.0)
+    - 누적점수(총점) : 참여율점수 + 평균점수(%)
+      (행사 목적상 '참여 독려 + 학습 성과'를 한 지표로 랭킹화)
+    """
     df = _load_results_df()
+    cols = [
+        "rank","organization","participants","target",
+        "participation_rate","participation_rate_score",
+        "avg_score_rate","cumulative_score","score_sum_rate",
+        "last_activity",
+    ]
     if df.empty:
-        return pd.DataFrame(columns=["rank","organization","participants","target","participation_rate","participation_rate_score","avg_score_rate","accum_score_rate","last_activity"])
+        return pd.DataFrame(columns=cols)
+
     df = df.copy()
     df["organization"] = df["organization"].fillna("미분류").astype(str).str.strip()
     df["employee_no"] = df["employee_no"].astype(str).str.strip()
@@ -754,57 +768,119 @@ def compute_org_scoreboard() -> pd.DataFrame:
     g = df.groupby("organization", dropna=False).agg(
         participants=("employee_no","nunique"),
         avg_score_rate=("score_rate","mean"),
-        accum_score_rate=("score_rate","sum"),
+        score_sum_rate=("score_rate","sum"),
         last_activity=("ended_at","max"),
     ).reset_index()
 
+    # 목표 인원(기관별) 매핑
     targets = _load_org_targets()
     g["target"] = g["organization"].map(targets).fillna(0).astype(int)
-    g["participation_rate"] = np.where(g["target"]>0, (g["participants"]/g["target"])*100.0, np.nan)
-    g["participation_rate_score"] = g["participation_rate"].apply(lambda x: _participation_rate_score(x) if pd.notna(x) else np.nan)
 
-    g["_prs"] = pd.to_numeric(g["participation_rate_score"], errors="coerce").fillna(-1)
-    g["_avg"] = pd.to_numeric(g["avg_score_rate"], errors="coerce").fillna(0)
+    # 참여율 및 참여율점수
+    g["participation_rate"] = np.where(
+        g["target"] > 0,
+        (g["participants"] / g["target"]) * 100.0,
+        np.nan
+    )
+    g["participation_rate_score"] = g["participation_rate"].apply(
+        lambda x: _participation_rate_score(x) if pd.notna(x) else np.nan
+    )
+
+    # 누적점수(총점) = 참여율점수 + 평균점수(%)
+    # - target이 없는 기관(참여율점수 NaN)은 0점으로 처리하여 평균점수만 반영되도록 함
+    g["_prs"] = pd.to_numeric(g["participation_rate_score"], errors="coerce").fillna(0.0)
+    g["_avg"] = pd.to_numeric(g["avg_score_rate"], errors="coerce").fillna(0.0)
+    g["cumulative_score"] = (g["_prs"] + g["_avg"])
+
+    # 랭킹 기준: 누적점수(총점) ↓, 참여율점수 ↓, 평균점수 ↓, 참여자수 ↓
+    g["_cum"] = pd.to_numeric(g["cumulative_score"], errors="coerce").fillna(0.0)
     g["_p"] = pd.to_numeric(g["participants"], errors="coerce").fillna(0)
-    g = g.sort_values(["_prs","_avg","_p"], ascending=[False,False,False]).reset_index(drop=True)
-    g["rank"] = np.arange(1, len(g)+1)
-    g = g.drop(columns=["_prs","_avg","_p"])
+    g = g.sort_values(
+        ["_cum","_prs","_avg","_p"],
+        ascending=[False, False, False, False]
+    ).reset_index(drop=True)
+    g["rank"] = np.arange(1, len(g) + 1)
 
+    # 표시용 반올림(가독성: 소수 1자리)
     g["avg_score_rate"] = g["avg_score_rate"].round(1)
-    g["accum_score_rate"] = g["accum_score_rate"].round(1)
+    g["score_sum_rate"] = g["score_sum_rate"].round(1)
     g["participation_rate"] = g["participation_rate"].round(1)
     g["participation_rate_score"] = g["participation_rate_score"].round(1)
+    g["cumulative_score"] = g["cumulative_score"].round(1)
 
-    return g[["rank","organization","participants","target","participation_rate","participation_rate_score","avg_score_rate","accum_score_rate","last_activity"]]
+    g = g.drop(columns=["_cum","_prs","_avg","_p"])
+
+    return g[cols]
+
 
 def render_org_electronic_board_sidebar():
+    """좌측 사이드바 전광판(기관 현황).
+
+    - 랭킹은 누적점수(총점)=참여율점수+평균점수(%) 기준
+    - 표시 포맷: 소수 1자리(%, 점수), 인원은 정수
+    """
+    # 메인 상단 이미지/헤더와 시각적 높이를 맞추기 위한 여백(HTML 미사용)
+    for _ in range(5):
+        st.sidebar.write("")
+
     st.sidebar.markdown("### 🏢 기관 전광판")
     sb = compute_org_scoreboard()
+
     if sb.empty:
         st.sidebar.info("아직 집계된 최종 결과가 없습니다.")
         return
 
-    top = sb.head(5).copy()
-    view = top[["rank","organization","participants","participation_rate_score","avg_score_rate"]].rename(columns={
-        "rank":"순위","organization":"기관","participants":"참여","participation_rate_score":"참여점수","avg_score_rate":"평균점수(%)"
-    })
-    st.sidebar.table(view)
+    # Top 기관 표(사이드바 폭 고려: 8개)
+    top = sb.head(8).copy()
+    disp = pd.DataFrame()
+    disp["순위"] = top["rank"].astype(int).astype(str)
+    disp["기관"] = top["organization"].astype(str)
 
+    disp["참여자(명)"] = top["participants"].fillna(0).astype(int).astype(str)
+    disp["목표(명)"] = top["target"].fillna(0).astype(int).astype(str)
+
+    disp["참여율(%)"] = top["participation_rate"].apply(
+        lambda x: "-" if pd.isna(x) else f"{float(x):.1f}%"
+    )
+    disp["참여율점수"] = top["participation_rate_score"].apply(
+        lambda x: "-" if pd.isna(x) else f"{float(x):.1f}"
+    )
+    disp["평균점수(%)"] = top["avg_score_rate"].apply(
+        lambda x: f"{float(x):.1f}%"
+    )
+    # 혼동 방지용: 참여자 점수율 합계(참고)
+    disp["점수합계(%)"] = top["score_sum_rate"].apply(
+        lambda x: f"{float(x):.1f}"
+    )
+    # 핵심: 누적점수(총점) = 참여율점수 + 평균점수(%)
+    disp["누적점수"] = top["cumulative_score"].apply(
+        lambda x: f"{float(x):.1f}"
+    )
+
+    st.sidebar.table(disp)
+
+    # 내 기관 요약(참가자 확인 후)
     u = st.session_state.get("user_info") or {}
-    org = str(u.get("org","")).strip()
+    org = str(u.get("org", "")).strip()
     if org:
-        me = sb[sb["organization"]==org]
+        me = sb[sb["organization"] == org]
         if not me.empty:
             r = me.iloc[0].to_dict()
             st.sidebar.markdown("---")
             st.sidebar.markdown(f"**내 기관: {org}**")
             st.sidebar.metric("순위", f"{int(r['rank'])} / {len(sb)}")
-            st.sidebar.metric("참여자(명)", int(r["participants"]))
-            tgt = int(r.get("target",0) or 0)
-            if tgt>0 and pd.notna(r.get("participation_rate")):
-                st.sidebar.metric("참여율(%)", f"{r['participation_rate']:.1f}%")
-                st.sidebar.metric("참여율점수", f"{r['participation_rate_score']:.1f}")
-            st.sidebar.metric("평균점수(%)", f"{r['avg_score_rate']:.1f}%")
+            st.sidebar.metric("참여자(명)", int(r.get("participants", 0) or 0))
+
+            tgt = int(r.get("target", 0) or 0)
+            if tgt > 0 and pd.notna(r.get("participation_rate")):
+                st.sidebar.metric("참여율(%)", f"{float(r['participation_rate']):.1f}%")
+                prs = r.get("participation_rate_score")
+                st.sidebar.metric("참여율점수", "-" if pd.isna(prs) else f"{float(prs):.1f}")
+            else:
+                st.sidebar.caption("※ 목표 인원(org_targets.csv) 미설정 기관은 참여율/참여율점수가 표시되지 않습니다.")
+
+            st.sidebar.metric("평균점수(%)", f"{float(r.get('avg_score_rate', 0.0)):.1f}%")
+            st.sidebar.metric("누적점수(총점)", f"{float(r.get('cumulative_score', 0.0)):.1f}")
 
 
 MAP_STAGE_IMAGES = {
@@ -2472,7 +2548,7 @@ def render_admin_page():
                 sb.rename(columns={
                     "rank":"순위","organization":"기관","participants":"참여자(명)","target":"목표(명)",
                     "participation_rate":"참여율(%)","participation_rate_score":"참여율점수",
-                    "avg_score_rate":"평균점수(%)","accum_score_rate":"누적점수(합계,%)","last_activity":"최근 종료"
+                    "avg_score_rate":"평균점수(%)","cumulative_score":"누적점수(=참여율점수+평균점수)","score_sum_rate":"점수합계(%)","last_activity":"최근 종료"
                 }),
                 use_container_width=True,
                 hide_index=True,
