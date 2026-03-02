@@ -1653,24 +1653,33 @@ def _render_employee_lookup_popup_body(name_query: str = ""):
     if exact_cnt >= 2:
         st.warning(f"동명이인 {exact_cnt}명이 확인되었습니다. 반드시 사번을 확인해 선택해주세요.")
 
-    edited = st.data_editor(
-        select_df,
-        use_container_width=True,
-        hide_index=True,
-        height=min(320, 90 + len(select_df) * 35),
-        column_config={
-            "선택": st.column_config.CheckboxColumn("선택", help="본인 정보 1개만 선택하세요.", width="small"),
-        },
-        disabled=["사번", "이름", "소속 기관"],
-        key="employee_candidate_checkbox_table",
-    )
+    # ✅ 호환성/안정성을 위해 st.data_editor(CheckboxColumn) 대신, 체크박스 기반 단일 선택 UI를 사용합니다.
+st.markdown("**조회 결과에서 본인 정보를 1개만 선택하세요.**")
+h1, h2, h3, h4 = st.columns([0.12, 0.28, 0.28, 0.32])
+with h1: st.write("선택")
+with h2: st.write("사번")
+with h3: st.write("이름")
+with h4: st.write("소속 기관")
 
-    selected_rows = edited[edited["선택"] == True]  # noqa: E712
-    selected_idx = None
-    if len(selected_rows) == 1:
-        # 원본 candidates 인덱스는 edited의 행 순서와 동일
-        selected_idx = int(selected_rows.index[0])
+selected_indices = []
+for i, row in candidates.reset_index(drop=True).iterrows():
+    c0, c1, c2, c3 = st.columns([0.12, 0.28, 0.28, 0.32])
+    with c0:
+        checked = st.checkbox("", key=f"employee_pick_{i}")
+    with c1:
+        st.write(str(row.get("employee_no", "")))
+    with c2:
+        st.write(str(row.get("name", "")))
+    with c3:
+        st.write(str(row.get("organization", "")))
+    if checked:
+        selected_indices.append(i)
 
+selected_idx = None
+if len(selected_indices) == 1:
+    selected_idx = int(selected_indices[0])
+elif len(selected_indices) >= 2:
+    st.warning("동시에 2개 이상 선택할 수 없습니다. 본인 정보 1개만 선택해 주세요.")
     # 선택된 1건이 있으면 하단 미리보기 카드 표시
     if selected_idx is not None and 0 <= selected_idx < len(candidates):
         preview = candidates.iloc[int(selected_idx)].to_dict()
@@ -1719,7 +1728,6 @@ def _render_employee_lookup_popup_body(name_query: str = ""):
 
 
 if hasattr(st, "dialog"):
-    @st.dialog("📋 직원 정보 확인")
     def render_employee_lookup_popup(name_query: str = ""):
         _render_employee_lookup_popup_body(name_query)
 else:
