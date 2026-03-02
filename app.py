@@ -452,6 +452,15 @@ div[data-testid="stToast"] * {
 }
 .stToast * { color: rgba(255,255,255,0.96) !important; }
 
+
+/* Sidebar readability (electronic board) */
+[data-testid="stSidebar"] {
+    background-color: #0B1220 !important;
+    color: #EAEAEA !important;
+}
+[data-testid="stSidebar"] * {
+    color: #EAEAEA !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -2025,6 +2034,21 @@ def reset_game():
     st.rerun()
 
 
+def reset_participant_to_intro():
+    """Reset only the current participant/session flow back to the intro screen.
+
+    Keeps admin authentication state if present.
+    """
+    keep_admin = bool(st.session_state.get("admin_authed", False))
+    keep_candidates = st.session_state.get("employee_lookup_candidates", [])
+    # Hard reset the session, then re-init defaults
+    st.session_state.clear()
+    init_state()
+    st.session_state.admin_authed = keep_admin
+    st.session_state.employee_lookup_candidates = keep_candidates
+    st.session_state.stage = "intro"
+    scroll_to_top(0)
+    st.rerun()
 
 
 def _derive_attempt_uid_series(df: pd.DataFrame) -> pd.Series:
@@ -3342,7 +3366,6 @@ try:
 
     elif st.session_state.stage == "ending":
         render_top_spacer()
-        save_final_result_if_needed()
         user_name = st.session_state.user_info.get("name", "가디언")
         user_org = st.session_state.user_info.get("org", "")
         score = st.session_state.score
@@ -3422,28 +3445,25 @@ try:
         st.markdown("<div class='brief-actions-wrap'></div>", unsafe_allow_html=True)
         c1, c2 = st.columns([1, 1], gap='large')
         with c1:
-            if st.button("🗺️ 지도 다시 보기", use_container_width=True):
-                st.session_state.stage = "map"
-                st.rerun()
+            if st.button("✅ 최종 제출(Submit)", use_container_width=True):
+                # Final results are persisted ONLY when the learner explicitly submits.
+                save_final_result_if_needed(force=True)
+                reset_participant_to_intro()
         with c2:
-            if st.button("🔄 다시 도전", use_container_width=True):
+            if st.button("🔄 다시 도전(Challenge again)", use_container_width=True):
+                # Restart from Stage 1 (first mission briefing) WITHOUT persisting any final result.
                 u = st.session_state.get("user_info", {}) or {}
-                emp_no = str(u.get("employee_no", "")).strip()
                 emp_name = str(u.get("name", "")).strip()
-                emp_org = str(u.get("org", "")).strip() or "미분류"
                 if not emp_name:
-                    st.warning("참가자 정보가 없어 처음 화면으로 이동합니다.")
-                    reset_game()
+                    reset_participant_to_intro()
                 else:
-                    hist = _summarize_user_attempts(emp_no, emp_name, emp_org)
-                    completed_attempts = int(hist.get("completed_attempts", 0) or 0)
-                    if completed_attempts >= 3:
-                        st.error("이미 최대 참여 횟수(총 3회)를 모두 사용했습니다.")
-                    else:
-                        _set_retry_offer({"employee_no": emp_no, "name": emp_name, "org": emp_org}, completed_attempts, context="ending")
-                        st.rerun()
+                    attempt_round = int(st.session_state.get("training_attempt_round", 1) or 1)
+                    start_training_attempt_session(u, attempt_round + 1, skip_to_stage="briefing")
+                    st.session_state.current_mission = SCENARIO_ORDER[0]
+                    st.session_state.stage = "briefing"
+                    scroll_to_top(80)
+                    st.rerun()
 
-        render_retry_offer_box("ending")
     else:
         st.error("알 수 없는 stage입니다. 앱을 다시 시작해주세요.")
 
