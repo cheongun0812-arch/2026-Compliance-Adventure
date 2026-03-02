@@ -120,19 +120,43 @@ div[role="radiogroup"] > label:hover {
 }
 
 /* 버튼 */
+div.stButton > button[kind="secondary"],
+div.stButton > button[kind="tertiary"],
 div.stButton > button:first-child {
     background-color: #00C853 !important;
-    color: white !important;
+    color: #FFFFFF !important;
     border-radius: 12px !important;
     border: none !important;
     font-weight: 700 !important;
     min-height: 44px !important;
 }
+div.stButton > button[kind="secondary"]:hover,
+div.stButton > button[kind="tertiary"]:hover,
 div.stButton > button:first-child:hover {
     filter: brightness(1.05);
 }
 
-/* 카드 */
+/* Gold blur (subtle) for key action buttons */
+div.stButton > button[kind="primary"] {
+    background: linear-gradient(135deg, rgba(212,175,55,0.35), rgba(212,175,55,0.18)) !important;
+    border: 1px solid rgba(212,175,55,0.42) !important;
+    color: #0E1117 !important;
+    border-radius: 12px !important;
+    font-weight: 800 !important;
+    min-height: 44px !important;
+    box-shadow: 0 6px 18px rgba(212,175,55,0.12) !important;
+}
+div.stButton > button[kind="primary"]:hover {
+    filter: brightness(1.03);
+    box-shadow: 0 8px 22px rgba(212,175,55,0.16) !important;
+}
+
+/* Disabled button readability */
+div.stButton > button:disabled {
+    opacity: 0.55 !important;
+    cursor: not-allowed !important;
+}
+ /* 카드 */
 .card {
     background: #161A22;
     border: 1px solid #2B3140;
@@ -421,11 +445,11 @@ div[data-testid="stDialog"] button[kind="header"] svg {
 .gold {
     color: #D4AF37 !important;
     font-weight: 900 !important;
-    background: rgba(212, 175, 55, 0.14) !important;
+    background: rgba(212, 175, 55, 0.10) !important;
     border: 1px solid rgba(212, 175, 55, 0.28) !important;
     padding: 0.05rem 0.28rem !important;
     border-radius: 0.45rem !important;
-    text-shadow: 0 0 10px rgba(212,175,55,0.22) !important;
+    text-shadow: 0 0 8px rgba(212,175,55,0.14) !important;
     white-space: normal;
 }
 .brief-chip.gold-chip {
@@ -452,6 +476,34 @@ div[data-testid="stToast"] * {
 }
 .stToast * { color: rgba(255,255,255,0.96) !important; }
 
+
+
+/* Stage status boxes on map (flow guidance) */
+.stage-box {
+    border-radius: 12px;
+    padding: 10px 12px;
+    border: 1px solid #2B3140;
+    background: #141B24;
+    color: #F4F7FF;
+    font-weight: 800;
+    line-height: 1.2;
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+}
+.stage-box .stage-title { font-weight: 900; margin-bottom: 4px; }
+.stage-box .stage-sub { font-weight: 700; color: #B7C4D8; font-size: 0.86rem; margin-top: 4px; }
+.stage-clear {
+    background: #0F1622;
+    border-color: #2B3140;
+}
+.stage-locked {
+    background: rgba(0,200,83,0.18);
+    border-color: rgba(0,200,83,0.35);
+    color: #F7FFF9;
+}
 
 /* Sidebar readability (electronic board) */
 [data-testid="stSidebar"] {
@@ -521,6 +573,21 @@ def safe_dataframe(data, **kwargs):
             st.write(df_obj)
         else:
             st.write(data)
+
+
+
+def safe_button(label: str, *, key: str | None = None, use_container_width: bool = False, disabled: bool = False, primary: bool = False) -> bool:
+    """
+    Streamlit 버전별 버튼 API 차이를 흡수하는 안전 래퍼.
+    - 최신: st.button(..., type="primary") 지원
+    - 구버전: type 인자를 받지 않으므로 자동 fallback
+    """
+    if not primary:
+        return st.button(label, key=key, use_container_width=use_container_width, disabled=disabled)
+    try:
+        return st.button(label, key=key, use_container_width=use_container_width, disabled=disabled, type="primary")
+    except TypeError:
+        return st.button(label, key=key, use_container_width=use_container_width, disabled=disabled)
 
 
 def render_top_spacer():
@@ -2817,7 +2884,7 @@ def render_briefing(m_key: str):
     st.markdown("<div class='brief-actions-wrap'></div>", unsafe_allow_html=True)
     c1, c2 = st.columns([1, 1], gap='large')
     with c1:
-        if st.button("📝 퀴즈 시작", use_container_width=True):
+        if safe_button("📝 퀴즈 시작", use_container_width=True, primary=True):
             st.session_state.stage = "quiz"
             st.rerun()
     with c2:
@@ -2905,7 +2972,7 @@ def render_mcq_question(m_key: str, q_idx: int, q_data: dict):
         key=f"radio_{m_key}_{q_idx}",
     )
 
-    if st.button("제출하기", key=f"submit_mcq_{m_key}_{q_idx}", use_container_width=True):
+    if safe_button("제출하기", key=f"submit_mcq_{m_key}_{q_idx}", use_container_width=True, primary=True):
         is_correct = selected == q_data["answer"]
         awarded = q_data["score"] if is_correct else 0
         st.session_state.attempt_counts[m_key] = st.session_state.attempt_counts.get(m_key, 0) + 1
@@ -3042,7 +3109,7 @@ def render_text_question(m_key: str, q_idx: int, q_data: dict):
         placeholder=(sample_answer if sample_answer else "예: 원칙을 설명하고, 가능한 대안(보고/확인/절차)을 함께 적어보세요."),
     )
 
-    if st.button("제출하기", key=f"submit_text_{m_key}_{q_idx}", use_container_width=True):
+    if safe_button("제출하기", key=f"submit_text_{m_key}_{q_idx}", use_container_width=True, primary=True):
         if is_near_copy_answer(answer_text, q_data.get("sample_answer", ""), q_data.get("model_answer", "")):
             st.warning("예시/모범답안 문장을 그대로 복사한 답안은 제출할 수 없습니다. 같은 뜻이어도 본인 표현으로 바꿔 작성해주세요.")
             return
@@ -3104,7 +3171,7 @@ def render_quiz_navigation_controls(m_key: str):
             st.rerun()
     with c2:
         if idx < total_q - 1:
-            if st.button("다음 문제 ▶", key=f"nav_next_{m_key}_{idx}", use_container_width=True, disabled=(not current_submitted)):
+            if safe_button("다음 문제 ▶", key=f"nav_next_{m_key}_{idx}", use_container_width=True, disabled=(not current_submitted), primary=True):
                 progress["current_idx"] = min(total_q - 1, idx + 1)
                 st.rerun()
         else:
@@ -3222,11 +3289,10 @@ if pending:
     )
     st.rerun()
 with st.sidebar:
-    render_org_electronic_board_sidebar()
-
-    st.markdown("---")
+    # 사이드바에는 관리자 대시보드만 노출합니다. (기관 전광판은 관리자 대시보드 내에서만 확인)
     st.caption("관리자")
     if st.button("🔐 관리자 대시보드", use_container_width=True):
+
         st.session_state.stage = "admin"
         st.rerun()
     if st.session_state.get("admin_authed", False):
@@ -3388,16 +3454,28 @@ try:
                     _mx = max(theme_max_score(m_key), 1)
                     _rt = score / _mx
                     badge = "🏅" if _rt >= 0.9 else ("✅" if _rt >= 0.7 else "📘")
-                    st.success(f"{badge} {mission['title']}")
-                    st.caption(f"점수 {score}/{theme_max_score(m_key)}")
+                    st.markdown(
+                        f"""
+                        <div class='stage-box stage-clear'>
+                          <div class='stage-title'>{badge} {html.escape(mission['title'])}</div>
+                          <div class='stage-sub'>점수 {score}/{theme_max_score(m_key)}</div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
                 elif status == "open":
-                    if st.button(f"{mission['title']} 진입", key=f"enter_{m_key}", use_container_width=True):
+                    if safe_button(f"{mission['title']} 진입", key=f"enter_{m_key}", use_container_width=True, primary=True):
                         st.session_state.current_mission = m_key
                         ensure_quiz_progress(m_key)
                         st.session_state.stage = "briefing"
                         st.rerun()
                 else:
-                    st.button("🔒 잠겨 있음", key=f"locked_{m_key}", disabled=True, use_container_width=True)
+                    st.markdown(
+                        """
+                        <div class='stage-box stage-locked'>🔒 잠겨 있음</div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
 
         st.write("---")
         st.markdown(
@@ -3530,7 +3608,7 @@ try:
         st.markdown("<div class='brief-actions-wrap'></div>", unsafe_allow_html=True)
         c1, c2 = st.columns([1, 1], gap='large')
         with c1:
-            if st.button("✅ 최종 제출(Submit)", use_container_width=True):
+            if safe_button("✅ 최종 제출(Submit)", use_container_width=True, primary=True):
                 # Final results are persisted ONLY when the learner explicitly submits.
                 save_final_result_if_needed(force=True)
                 reset_participant_to_intro()
