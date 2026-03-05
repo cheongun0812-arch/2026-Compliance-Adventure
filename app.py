@@ -452,6 +452,13 @@ div[data-testid="stDialog"] button[kind="header"] svg {
     text-shadow: 0 0 8px rgba(212,175,55,0.14) !important;
     white-space: normal;
 }
+
+/* Gold text (no bright blur) */
+.gold-text {
+    color: #D4AF37 !important;
+    font-weight: 900 !important;
+    text-shadow: 0 0 6px rgba(212,175,55,0.10) !important;
+}
 .brief-chip.gold-chip {
     border-color: rgba(212,175,55,0.55) !important;
     color: #D4AF37 !important;
@@ -3177,7 +3184,7 @@ def render_quiz_navigation_controls(m_key: str):
         else:
             all_submitted = len(submissions) == total_q
             mark_theme_complete_if_ready(m_key)
-            if st.button("🏁 테마 정복 완료! 맵으로 돌아가기", key=f"nav_finish_{m_key}", use_container_width=True, disabled=(not all_submitted)):
+            if safe_button("🏁 테마 정복 완료! 맵으로 돌아가기", key=f"nav_finish_{m_key}", use_container_width=True, disabled=(not all_submitted), primary=True):
                 st.session_state.stage = "map"
                 st.rerun()
 
@@ -3317,8 +3324,8 @@ try:
         st.markdown(
             """
             <div class='card'>
-              <div class='card-title'>게임 방식</div>
-              <div>맵에서 테마를 선택 → 핵심 브리핑 학습 → 퀴즈(4지선다 + 주관식) → 정복 완료!</div>
+              <div class='card-title gold-text'>교육 방식</div>
+              <div class='gold-text'>Select a theme from the map → Study the core briefing → Quiz (4 choices + short answer) → Conquer completed!</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -3400,7 +3407,7 @@ try:
             _render_confirm_readonly_field(col_c, '소속 기관', selected_emp.get('organization', ''))
 
             st.markdown("<div style='height:6px;'></div>", unsafe_allow_html=True)
-            if st.button('모험 시작하기', use_container_width=True):
+            if safe_button('모험 시작하기', use_container_width=True, primary=True):
                 emp_no = str(selected_emp.get('employee_no', '')).strip()
                 emp_name = str(selected_emp.get('name', '')).strip()
                 emp_org = str(selected_emp.get('organization', '')).strip() or '미분류'
