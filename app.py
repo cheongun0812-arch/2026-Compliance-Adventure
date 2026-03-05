@@ -1,4 +1,8 @@
 import streamlit as st
+# 한글화 과정에서 사용된 별칭 API 지원 (기능/레이아웃은 그대로 유지)
+# - st.재실행(): Streamlit의 st.rerun()에 해당
+if not hasattr(st, "재실행"):
+    st.재실행 = st.rerun
 from datetime import datetime
 from pathlib import Path
 import csv
