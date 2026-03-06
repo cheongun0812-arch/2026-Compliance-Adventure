@@ -2653,6 +2653,90 @@ def render_admin_page():
                 use_container_width=True,
             )
 
+            st.markdown("---")
+            st.subheader("참가자별 기관 현황 (1인 1레코드)")
+            try:
+                sb = compute_org_scoreboard()
+            except Exception:
+                sb = pd.DataFrame()
+
+            # 기관별 지표를 참가자 최종결과(1인 1레코드)에 조인하여,
+            # 스크린샷 형식(순번~최근 종료)으로 1인 1행 로그를 구성합니다.
+            base = df.copy()
+
+            # 정렬(최근 종료 우선)
+            try:
+                base["_ended_sort"] = pd.to_datetime(base.get("ended_at", ""), errors="coerce")
+                base = base.sort_values("_ended_sort", ascending=False).drop(columns=["_ended_sort"])
+            except Exception:
+                pass
+
+            # 기관 지표 맵 구성
+            org_map = {}
+            if isinstance(sb, pd.DataFrame) and not sb.empty:
+                for _, r in sb.iterrows():
+                    org = str(r.get("organization", "")).strip()
+                    if not org:
+                        continue
+                    org_map[org] = {
+                        "participants": r.get("participants", ""),
+                        "target": r.get("target", ""),
+                        "participation_rate": r.get("participation_rate", ""),
+                        "participation_rate_score": r.get("participation_rate_score", ""),
+                        "avg_score_rate": r.get("avg_score_rate", ""),
+                        "cumulative_score": r.get("cumulative_score", ""),
+                        "score_sum_rate": r.get("score_sum_rate", ""),
+                    }
+
+            rows = []
+            for i, r in base.iterrows():
+                org = str(r.get("organization", "")).strip() or "미분류"
+                m = org_map.get(org, {})
+                rows.append({
+                    "순번": len(rows) + 1,
+                    "사원번호": str(r.get("employee_no", "") or "").strip(),
+                    "참여자": str(r.get("name", "") or "").strip(),
+                    "기관": org,
+                    "참여자(명)": m.get("participants", ""),
+                    "목표(명)": m.get("target", ""),
+                    "참여율(%)": m.get("participation_rate", ""),
+                    "참여율점수": m.get("participation_rate_score", ""),
+                    "평균점수(%)": m.get("avg_score_rate", ""),
+                    "누적점수(=참여율점수+평균점수)": m.get("cumulative_score", ""),
+                    "점수합계(%)": m.get("score_sum_rate", ""),
+                    "최근 종료": str(r.get("ended_at", "") or "").strip(),
+                })
+
+            person_log = pd.DataFrame(rows)
+
+            # 표시용 포맷(스크린샷과 동일한 느낌: 소수 1자리, 인원은 정수)
+            def _fmt_int(x):
+                try:
+                    if x == "" or x is None or (isinstance(x, float) and pd.isna(x)):
+                        return ""
+                    return int(float(str(x).replace("%", "").replace(",", "").strip()))
+                except Exception:
+                    return x
+
+            def _fmt_float1(x):
+                try:
+                    if x == "" or x is None or (isinstance(x, float) and pd.isna(x)):
+                        return ""
+                    return round(float(str(x).replace("%", "").replace(",", "").strip()), 1)
+                except Exception:
+                    return x
+
+            for col in ["참여자(명)", "목표(명)"]:
+                if col in person_log.columns:
+                    person_log[col] = person_log[col].apply(_fmt_int)
+
+            for col in ["참여율(%)", "참여율점수", "평균점수(%)", "누적점수(=참여율점수+평균점수)", "점수합계(%)"]:
+                if col in person_log.columns:
+                    person_log[col] = person_log[col].apply(_fmt_float1)
+
+            st.dataframe(person_log, use_container_width=True, hide_index=True)
+            st.caption("※ 본 표는 '최종 결과(1인 1레코드)'에 기관별 전광판 지표를 조인하여 참가자별로 표시합니다. (요청하신 스크린샷 형식)")
+
 
 
 def render_admin_question_stats():
