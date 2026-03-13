@@ -17,6 +17,19 @@ try:
 except Exception:
     StreamlitInvalidHeightError = Exception
 import streamlit.components.v1 as components
+# =========================================================
+# (신규) Google Sheets 연동 (데이터 영속성 확보)
+#  - Streamlit Cloud / GitHub 배포 환경에서는 로컬 CSV가 초기화될 수 있으므로,
+#    최종적으로는 Google Sheets를 '원장(SoT)'로 사용합니다.
+#  - 기존 기능/레이아웃은 유지하고, CSV 기록과 동일한 내용을 Sheets에 추가로 적재합니다.
+# =========================================================
+try:
+    import gspread
+    from oauth2client.service_account import ServiceAccountCredentials
+except Exception:
+    gspread = None
+    ServiceAccountCredentials = None
+
 
 
 def scroll_to_top(delay_ms: int = 0) -> None:
@@ -44,6 +57,7 @@ import re
 import difflib
 import html
 import random
+import shutil
 
 # =========================================================
 # 1) 페이지 설정 / 스타일
@@ -660,7 +674,264 @@ LOG_FIELDNAMES = [
     "organization",
     "department",
     "mission_key",
-    "mission_title",
+    "
+# =========================================================
+# (신규) Google Sheets 백엔드
+# =========================================================
+def _gsheets_settings() -> dict:
+    """Secrets에서 Google Sheets 설정을 최대한 관대하게 로딩합니다.
+
+    지원 키(우선순위 순):
+    - st.secrets["compliance_adventure"]["spreadsheet_name"]
+    - st.secrets["gsheets"]["spreadsheet_name"]
+    - st.secrets["GSHEETS_SPREADSHEET_NAME"] (단일 키)
+    - st.secrets["spreadsheet_name"] (단일 키)
+    """
+    s = {}
+    try:
+        if "compliance_adventure" in st.secrets:
+            s = dict(st.secrets["compliance_adventure"])
+        elif "gsheets" in st.secrets:
+            s = dict(st.secrets["gsheets"])
+    except Exception:
+        s = {}
+
+    def pick(*keys, default=""):
+        for k in keys:
+            try:
+                v = s.get(k) if isinstance(s, dict) else None
+            except Exception:
+                v = None
+            if v:
+                return str(v).strip()
+            try:
+                v2 = st.secrets.get(k)
+                if v2:
+                    return str(v2).strip()
+            except Exception:
+                pass
+        return default
+
+    return {
+        "spreadsheet_name": pick("spreadsheet_name", "spreadsheet", "spreadsheetTitle", "GSHEETS_SPREADSHEET_NAME", "spreadsheetName", default="2026_Compliance_Adventure"),
+        "log_worksheet": pick("log_worksheet", "log_sheet", default="Compliance_Training_Log"),
+        "results_worksheet": pick("results_worksheet", "results_sheet", default="Training_Results"),
+        "enabled": True,
+    }
+
+@st.cache_resource
+def _gsheets_client():
+    if gspread is None or ServiceAccountCredentials is None:
+        return None
+    try:
+        scope = [
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive",
+        ]
+        creds_dict = st.secrets.get("gcp_service_account", None)
+        if not creds_dict:
+            return None
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+        return gspread.authorize(creds)
+    except Exception:
+        return None
+
+def _gsheets_open():
+    """스프레드시트 핸들을 반환(없으면 None)."""
+    client = _gsheets_client()
+    if not client:
+        return None
+    cfg = _gsheets_settings()
+    try:
+        return client.open(cfg["spreadsheet_name"])
+    except Exception:
+        return None
+
+def _gsheets_ensure_worksheet(spreadsheet, title: str, header: list[str]):
+    """워크시트가 없으면 생성하고, 헤더가 없으면 1행에 헤더를 설정."""
+    try:
+        ws = spreadsheet.worksheet(title)
+    except Exception:
+        # rows/cols는 넉넉히(실제는 자동 확장)
+        ws = spreadsheet.add_worksheet(title=title, rows=5000, cols=max(20, len(header) + 2))
+
+    try:
+        first_row = ws.row_values(1)
+    except Exception:
+        first_row = []
+
+    if not first_row:
+        ws.append_row(header)
+        return ws
+
+    # 헤더 불일치 시: 기존 헤더 뒤에 누락 컬럼만 확장(덮어쓰지 않음)
+    existing = [str(x).strip() for x in first_row]
+    missing = [h for h in header if h not in existing]
+    if missing:
+        ws.update(f"A1:{chr(64+len(existing+missing))}1", [existing + missing])
+    return ws
+
+def _gsheets_append_row_safe(ws, values: list):
+    """구글시트 append의 일시 실패를 견디는 보수적 재시도."""
+    last_err = None
+    for delay in (0.2, 0.6, 1.2):
+        try:
+            ws.append_row(values, value_input_option="USER_ENTERED")
+            return True, None
+        except Exception as e:
+            last_err = e
+            try:
+                time.sleep(delay)
+            except Exception:
+                pass
+    return False, str(last_err)
+
+def _gsheets_enabled() -> bool:
+    sp = _gsheets_open()
+    return sp is not None
+
+def _gsheets_sync_log_row(row: dict) -> None:
+    """로컬 CSV 로그 1행을 Google Sheets에도 적재(세션 중복 방지)."""
+    if not st.session_state.get("gsheets_sync_enabled", True):
+        return
+    sp = _gsheets_open()
+    if sp is None:
+        return
+
+    # 세션 단위 중복 방지(클릭/재실행으로 같은 이벤트가 2번 기록되는 경우)
+    pushed = st.session_state.setdefault("_gs_pushed_log_ids", set())
+
+    # log_id는 최대한 안정적으로(재실행에 강함)
+    log_id = "|".join([
+        str(row.get("training_attempt_id","")),
+        str(row.get("attempt_round","")),
+        str(row.get("employee_no","")),
+        str(row.get("mission_key","")),
+        str(row.get("question_index","")),
+        str(row.get("attempt_no_for_mission","")),
+        str(row.get("timestamp","")),
+    ])
+    if log_id in pushed:
+        return
+
+    cfg = _gsheets_settings()
+    header = ["log_id"] + LOG_FIELDNAMES
+    ws = _gsheets_ensure_worksheet(sp, cfg["log_worksheet"], header)
+
+    values = [log_id] + [row.get(k, "") for k in LOG_FIELDNAMES]
+    ok, err = _gsheets_append_row_safe(ws, values)
+    if ok:
+        pushed.add(log_id)
+    else:
+        st.session_state["gsheets_last_error"] = err
+
+def _gsheets_sync_result_row(row: dict) -> None:
+    """로컬 최종결과 1행을 Google Sheets에도 업서트에 준하게 적재(세션 중복 방지)."""
+    if not st.session_state.get("gsheets_sync_enabled", True):
+        return
+    sp = _gsheets_open()
+    if sp is None:
+        return
+
+    pushed = st.session_state.setdefault("_gs_pushed_result_ids", set())
+    result_id = "|".join([
+        str(row.get("employee_no","")),
+        str(row.get("training_attempt_id","")),
+        str(row.get("attempt_round","")),
+        str(row.get("ended_at","")),
+    ])
+    if result_id in pushed:
+        return
+
+    cfg = _gsheets_settings()
+    header = ["result_id"] + RESULT_FIELDNAMES
+    ws = _gsheets_ensure_worksheet(sp, cfg["results_worksheet"], header)
+
+    values = [result_id] + [row.get(k, "") for k in RESULT_FIELDNAMES]
+    ok, err = _gsheets_append_row_safe(ws, values)
+    if ok:
+        pushed.add(result_id)
+    else:
+        st.session_state["gsheets_last_error"] = err
+
+@st.cache_data(ttl=120)
+def _gsheets_fetch_all(ws_title: str) -> list[list[str]]:
+    """워크시트 전체를 가져옴(캐시)."""
+    sp = _gsheets_open()
+    if sp is None:
+        return []
+    try:
+        ws = sp.worksheet(ws_title)
+        return ws.get_all_values()
+    except Exception:
+        return []
+
+def _bootstrap_local_csv_from_sheets_if_missing() -> None:
+    """로컬 CSV가 없을 때만(=초기화/배포로 파일이 날아간 경우) Sheets에서 복원."""
+    # 결과/로그 모두: 파일이 없을 때만 복원(기존 파일이 있으면 절대 덮어쓰지 않음)
+    sp = _gsheets_open()
+    if sp is None:
+        return
+
+    cfg = _gsheets_settings()
+
+    if not RESULTS_FILE.exists():
+        rows = _gsheets_fetch_all(cfg["results_worksheet"])
+        if rows and len(rows) >= 2:
+            # 헤더 검증: result_id 포함 가능
+            header = rows[0]
+            data = rows[1:]
+            # result_id 컬럼이 있으면 제거하고 RESULT_FIELDNAMES만 저장
+            if header and header[0] == "result_id":
+                # map header->index
+                idx = {h:i for i,h in enumerate(header)}
+                with RESULTS_FILE.open("w", newline="", encoding="utf-8-sig") as f:
+                    w = csv.DictWriter(f, fieldnames=RESULT_FIELDNAMES)
+                    w.writeheader()
+                    for r in data:
+                        d = {k: (r[idx[k]] if k in idx and idx[k] < len(r) else "") for k in RESULT_FIELDNAMES}
+                        w.writerow(d)
+            else:
+                # 헤더가 RESULT_FIELDNAMES와 동일하다고 가정
+                with RESULTS_FILE.open("w", newline="", encoding="utf-8-sig") as f:
+                    w = csv.writer(f)
+                    w.writerow(RESULT_FIELDNAMES)
+                    for r in data:
+                        # 길이 맞춤
+                        r2 = (r + [""] * len(RESULT_FIELDNAMES))[:len(RESULT_FIELDNAMES)]
+                        w.writerow(r2)
+
+    if not LOG_FILE.exists():
+        rows = _gsheets_fetch_all(cfg["log_worksheet"])
+        if rows and len(rows) >= 2:
+            header = rows[0]
+            data = rows[1:]
+            if header and header[0] == "log_id":
+                idx = {h:i for i,h in enumerate(header)}
+                with LOG_FILE.open("w", newline="", encoding="utf-8-sig") as f:
+                    w = csv.DictWriter(f, fieldnames=LOG_FIELDNAMES)
+                    w.writeheader()
+                    for r in data:
+                        d = {k: (r[idx[k]] if k in idx and idx[k] < len(r) else "") for k in LOG_FIELDNAMES}
+                        w.writerow(d)
+            else:
+                with LOG_FILE.open("w", newline="", encoding="utf-8-sig") as f:
+                    w = csv.writer(f)
+                    w.writerow(LOG_FIELDNAMES)
+                    for r in data:
+                        r2 = (r + [""] * len(LOG_FIELDNAMES))[:len(LOG_FIELDNAMES)]
+                        # 스키마 정규화는 후처리
+                        w.writerow(r2)
+                
+
+
+# (신규) 배포/초기화로 로컬 CSV가 사라진 경우, Sheets에서 자동 복원
+try:
+    _bootstrap_local_csv_from_sheets_if_missing()
+except Exception:
+    pass
+
+mission_title",
     "question_index",
     "question_code",
     "question_type",
@@ -732,6 +1003,14 @@ def _upsert_final_result(row: dict) -> None:
     if "ended_at" in df.columns:
         df["_ended_sort"] = pd.to_datetime(df["ended_at"], errors="coerce")
         df = df.sort_values("_ended_sort", ascending=False).drop(columns=["_ended_sort"])
+        # (데이터 보호) 저장 전 백업(최소 1회)
+    try:
+        if RESULTS_FILE.exists():
+            ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+            shutil.copy2(RESULTS_FILE, str(RESULTS_FILE) + f'.bak_{ts}')
+    except Exception:
+        pass
+
     df.to_csv(RESULTS_FILE, index=False, encoding="utf-8-sig")
 
 def save_final_result_if_needed(force: bool = False) -> None:
@@ -769,6 +1048,11 @@ def save_final_result_if_needed(force: bool = False) -> None:
         "attempt_round": st.session_state.get("training_attempt_round", 1),
     }
     _upsert_final_result(row)
+    # (신규) Google Sheets에도 최종 결과 적재(로컬 CSV 유지 + 외부 영속화)
+    try:
+        _gsheets_sync_result_row(row)
+    except Exception:
+        pass
     st.session_state.final_result_saved = True
 
 def _participation_rate_score(rate_percent: float) -> float:
@@ -1546,6 +1830,13 @@ def _ensure_log_schema_file():
     if not need_rewrite:
         return
 
+        # (데이터 보호) 스키마 정규화 전 원본 백업
+    try:
+        ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+        shutil.copy2(LOG_FILE, str(LOG_FILE) + f'.bak_{ts}')
+    except Exception:
+        pass
+
     rows = _read_log_rows_tolerant()
     with open(LOG_FILE, "w", newline="", encoding="utf-8-sig") as f:
         writer = csv.DictWriter(f, fieldnames=LOG_FIELDNAMES)
@@ -1981,6 +2272,12 @@ def append_attempt_log(mission_key: str, q_idx: int, q_type: str, payload: dict)
             writer.writerow(row)
     except Exception as e:
         st.session_state.log_write_error = str(e)
+
+    # (신규) Google Sheets에도 동일 로그 적재(로컬 CSV 유지 + 외부 영속화)
+    try:
+        _gsheets_sync_log_row(row)
+    except Exception:
+        pass
 
 _TEXT_KEYWORD_SYNONYM_MAP = {
     "서면": ["문서", "서류", "계약서", "발주서", "합의서", "기록"],
