@@ -41,6 +41,16 @@ import re
 import difflib
 import html
 import random
+import shutil
+import tempfile
+from typing import Optional
+
+try:
+    import gspread
+    from oauth2client.service_account import ServiceAccountCredentials
+except Exception:
+    gspread = None
+    ServiceAccountCredentials = None
 
 # =========================================================
 # 1) 페이지 설정 / 스타일
@@ -642,12 +652,120 @@ def safe_bar_chart(data, **kwargs):
 
 
 # =========================================================
-# 2) 파일 경로 / 에셋
-#    (이미지/사운드 모두 app.py와 같은 폴더에 있다고 가정)
+# 2) 파일 경로 / 에셋 / 데이터 보호 설정
 # =========================================================
 BASE_DIR = Path(__file__).parent if "__file__" in globals() else Path.cwd()
 ASSET_DIR = BASE_DIR
-LOG_FILE = BASE_DIR / "compliance_training_log.csv"
+DATA_DIR = BASE_DIR / "data"
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+BACKUP_KEEP_FILES = 80
+MIN_RESULTS_SHRINK_RATIO = 0.70  # 기존 대비 30% 이상 급감 시 저장 차단
+MIN_RESULTS_GUARD_ROWS = 30      # 소량 데이터 구간은 shrink guard 미적용
+
+def _resolve_data_file(filename: str) -> Path:
+    """기존 파일을 최우선으로 유지하고, 없으면 data/ 폴더를 사용."""
+    legacy = BASE_DIR / filename
+    managed = DATA_DIR / filename
+    if legacy.exists():
+        return legacy
+    return managed
+
+def _backup_glob(path: Path):
+    return sorted(path.parent.glob(f"{path.name}.bak_*"), key=lambda p: p.stat().st_mtime, reverse=True)
+
+def _count_csv_rows(path: Path) -> int:
+    if not path.exists() or path.stat().st_size <= 0:
+        return 0
+    try:
+        with path.open("r", encoding="utf-8-sig", newline="") as f:
+            return max(sum(1 for _ in csv.reader(f)) - 1, 0)
+    except Exception:
+        try:
+            df = pd.read_csv(path, dtype=str, encoding="utf-8-sig")
+            return len(df)
+        except Exception:
+            return 0
+
+def _make_backup(path: Path) -> Optional[Path]:
+    if not path.exists() or path.stat().st_size <= 0:
+        return None
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    bak = path.parent / f"{path.name}.bak_{ts}"
+    try:
+        shutil.copy2(path, bak)
+        for old in _backup_glob(path)[BACKUP_KEEP_FILES:]:
+            try:
+                old.unlink()
+            except Exception:
+                pass
+        return bak
+    except Exception:
+        return None
+
+def _atomic_write_bytes(path: Path, payload: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=path.name + ".tmp_", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "wb") as tmp:
+            tmp.write(payload)
+            tmp.flush()
+            os.fsync(tmp.fileno())
+        os.replace(tmp_name, path)
+    except Exception:
+        try:
+            os.unlink(tmp_name)
+        except Exception:
+            pass
+        raise
+
+def _safe_results_write(df: pd.DataFrame) -> None:
+    path = RESULTS_FILE
+    old_rows = _count_csv_rows(path)
+    new_rows = len(df)
+    if old_rows >= MIN_RESULTS_GUARD_ROWS and new_rows < int(old_rows * MIN_RESULTS_SHRINK_RATIO):
+        raise RuntimeError(
+            f"training_results.csv 저장 차단: 기존 {old_rows}건 → 신규 {new_rows}건으로 급감했습니다. "
+            "원본 보호를 위해 저장을 중단했습니다."
+        )
+    _make_backup(path)
+    payload = df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+    _atomic_write_bytes(path, payload)
+
+def _safe_log_rewrite(rows: list[dict]) -> None:
+    path = LOG_FILE
+    _make_backup(path)
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=LOG_FIELDNAMES)
+    writer.writeheader()
+    for row in rows:
+        writer.writerow(_normalize_log_row(row))
+    _atomic_write_bytes(path, output.getvalue().encode("utf-8-sig"))
+
+def _restore_from_latest_backup_if_missing_or_empty(path: Path, minimum_rows: int = 1) -> bool:
+    current_rows = _count_csv_rows(path)
+    if path.exists() and current_rows >= minimum_rows:
+        return False
+    backups = _backup_glob(path)
+    for bak in backups:
+        if _count_csv_rows(bak) >= minimum_rows:
+            try:
+                shutil.copy2(bak, path)
+                return True
+            except Exception:
+                pass
+    return False
+
+def _storage_status() -> dict:
+    return {
+        "results_path": str(RESULTS_FILE.resolve()),
+        "results_rows": _count_csv_rows(RESULTS_FILE),
+        "results_backups": len(_backup_glob(RESULTS_FILE)),
+        "log_path": str(LOG_FILE.resolve()),
+        "log_rows": _count_csv_rows(LOG_FILE),
+        "log_backups": len(_backup_glob(LOG_FILE)),
+    }
+
+LOG_FILE = _resolve_data_file("compliance_training_log.csv")
 LOG_FIELDNAMES = [
     "timestamp",
     "training_attempt_id",
@@ -669,7 +787,7 @@ LOG_FIELDNAMES = [
     "attempt_no_for_mission",
 ]
 
-RESULTS_FILE = BASE_DIR / "training_results.csv"
+RESULTS_FILE = _resolve_data_file("training_results.csv")
 RESULT_FIELDNAMES = [
     "employee_no",
     "name",
@@ -685,22 +803,232 @@ RESULT_FIELDNAMES = [
 ]
 
 
+def _gsheets_settings() -> dict:
+    s = {}
+    try:
+        if "compliance_adventure" in st.secrets:
+            s = dict(st.secrets["compliance_adventure"])
+        elif "gsheets" in st.secrets:
+            s = dict(st.secrets["gsheets"])
+    except Exception:
+        s = {}
+
+    def pick(*keys, default=""):
+        for k in keys:
+            try:
+                v = s.get(k) if isinstance(s, dict) else None
+            except Exception:
+                v = None
+            if v:
+                return str(v).strip()
+            try:
+                v2 = st.secrets.get(k)
+                if v2:
+                    return str(v2).strip()
+            except Exception:
+                pass
+        return default
+
+    return {
+        "spreadsheet_name": pick("spreadsheet_name", "spreadsheet", "GSHEETS_SPREADSHEET_NAME", default="2026_Compliance_Adventure"),
+        "log_worksheet": pick("log_worksheet", "log_sheet", default="Compliance_Training_Log"),
+        "results_worksheet": pick("results_worksheet", "results_sheet", default="Training_Results"),
+    }
+
+@st.cache_resource
+def _gsheets_client():
+    if gspread is None or ServiceAccountCredentials is None:
+        return None
+    try:
+        creds_dict = st.secrets.get("gcp_service_account", None)
+        if not creds_dict:
+            return None
+        scope = [
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive",
+        ]
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+        return gspread.authorize(creds)
+    except Exception:
+        return None
+
+def _gsheets_open():
+    client = _gsheets_client()
+    if not client:
+        return None
+    cfg = _gsheets_settings()
+    try:
+        return client.open(cfg["spreadsheet_name"])
+    except Exception:
+        return None
+
+def _gsheets_enabled() -> bool:
+    return _gsheets_open() is not None
+
+def _gsheets_ensure_worksheet(spreadsheet, title: str, header: list[str]):
+    try:
+        ws = spreadsheet.worksheet(title)
+    except Exception:
+        ws = spreadsheet.add_worksheet(title=title, rows=5000, cols=max(20, len(header) + 2))
+    try:
+        first_row = ws.row_values(1)
+    except Exception:
+        first_row = []
+    if not first_row:
+        ws.append_row(header)
+        return ws
+    existing = [str(x).strip() for x in first_row]
+    missing = [h for h in header if h not in existing]
+    if missing:
+        last_col = len(existing + missing)
+        def _excel_col(n: int) -> str:
+            s2 = ""
+            while n:
+                n, rem = divmod(n - 1, 26)
+                s2 = chr(65 + rem) + s2
+            return s2
+        ws.update(f"A1:{_excel_col(last_col)}1", [existing + missing])
+    return ws
+
+def _gsheets_append_row_safe(ws, values: list):
+    last_err = None
+    for delay in (0.2, 0.6, 1.2):
+        try:
+            ws.append_row(values, value_input_option="USER_ENTERED")
+            return True, None
+        except Exception as e:
+            last_err = e
+            try:
+                time.sleep(delay)
+            except Exception:
+                pass
+    return False, str(last_err)
+
+def _gsheets_sync_log_row(row: dict) -> None:
+    sp = _gsheets_open()
+    if sp is None:
+        return
+    pushed = st.session_state.setdefault("_gs_pushed_log_ids", set())
+    log_id = "|".join([
+        str(row.get("training_attempt_id", "")),
+        str(row.get("attempt_round", "")),
+        str(row.get("employee_no", "")),
+        str(row.get("mission_key", "")),
+        str(row.get("question_index", "")),
+        str(row.get("attempt_no_for_mission", "")),
+        str(row.get("timestamp", "")),
+    ])
+    if log_id in pushed:
+        return
+    cfg = _gsheets_settings()
+    ws = _gsheets_ensure_worksheet(sp, cfg["log_worksheet"], ["log_id"] + LOG_FIELDNAMES)
+    ok, err = _gsheets_append_row_safe(ws, [log_id] + [row.get(k, "") for k in LOG_FIELDNAMES])
+    if ok:
+        pushed.add(log_id)
+    else:
+        st.session_state["gsheets_last_error"] = err
+
+def _gsheets_sync_result_row(row: dict) -> None:
+    sp = _gsheets_open()
+    if sp is None:
+        return
+    pushed = st.session_state.setdefault("_gs_pushed_result_ids", set())
+    result_id = "|".join([
+        str(row.get("employee_no", "")),
+        str(row.get("training_attempt_id", "")),
+        str(row.get("attempt_round", "")),
+        str(row.get("ended_at", "")),
+    ])
+    if result_id in pushed:
+        return
+    cfg = _gsheets_settings()
+    ws = _gsheets_ensure_worksheet(sp, cfg["results_worksheet"], ["result_id"] + RESULT_FIELDNAMES)
+    ok, err = _gsheets_append_row_safe(ws, [result_id] + [row.get(k, "") for k in RESULT_FIELDNAMES])
+    if ok:
+        pushed.add(result_id)
+    else:
+        st.session_state["gsheets_last_error"] = err
+
+@st.cache_data(ttl=120)
+def _gsheets_fetch_all(ws_title: str) -> list[list[str]]:
+    sp = _gsheets_open()
+    if sp is None:
+        return []
+    try:
+        ws = sp.worksheet(ws_title)
+        return ws.get_all_values()
+    except Exception:
+        return []
+
+def _bootstrap_local_csv_from_sheets_if_missing() -> None:
+    sp = _gsheets_open()
+    if sp is None:
+        return
+    cfg = _gsheets_settings()
+
+    if not RESULTS_FILE.exists() or _count_csv_rows(RESULTS_FILE) == 0:
+        rows = _gsheets_fetch_all(cfg["results_worksheet"])
+        if rows and len(rows) >= 2:
+            header = rows[0]
+            data = rows[1:]
+            idx = {h: i for i, h in enumerate(header)}
+            output = io.StringIO()
+            w = csv.DictWriter(output, fieldnames=RESULT_FIELDNAMES)
+            w.writeheader()
+            for r in data:
+                d = {k: (r[idx[k]] if k in idx and idx[k] < len(r) else "") for k in RESULT_FIELDNAMES}
+                w.writerow(d)
+            _atomic_write_bytes(RESULTS_FILE, output.getvalue().encode("utf-8-sig"))
+
+    if not LOG_FILE.exists() or _count_csv_rows(LOG_FILE) == 0:
+        rows = _gsheets_fetch_all(cfg["log_worksheet"])
+        if rows and len(rows) >= 2:
+            header = rows[0]
+            data = rows[1:]
+            idx = {h: i for i, h in enumerate(header)}
+            output = io.StringIO()
+            w = csv.DictWriter(output, fieldnames=LOG_FIELDNAMES)
+            w.writeheader()
+            for r in data:
+                d = {k: (r[idx[k]] if k in idx and idx[k] < len(r) else "") for k in LOG_FIELDNAMES}
+                w.writerow(d)
+            _atomic_write_bytes(LOG_FILE, output.getvalue().encode("utf-8-sig"))
+
+
+try:
+    _restore_from_latest_backup_if_missing_or_empty(LOG_FILE, minimum_rows=1)
+    _restore_from_latest_backup_if_missing_or_empty(RESULTS_FILE, minimum_rows=1)
+    _bootstrap_local_csv_from_sheets_if_missing()
+except Exception:
+    pass
+
 # =========================
 # Final Results (1인 1레코드)
 # =========================
 def _ensure_results_file():
     if not RESULTS_FILE.exists():
-        with RESULTS_FILE.open("w", newline="", encoding="utf-8-sig") as f:
-            w = csv.DictWriter(f, fieldnames=RESULT_FIELDNAMES)
-            w.writeheader()
+        output = io.StringIO()
+        w = csv.DictWriter(output, fieldnames=RESULT_FIELDNAMES)
+        w.writeheader()
+        _atomic_write_bytes(RESULTS_FILE, output.getvalue().encode("utf-8-sig"))
 
 def _load_results_df() -> pd.DataFrame:
+    if (not RESULTS_FILE.exists()) or _count_csv_rows(RESULTS_FILE) == 0:
+        _restore_from_latest_backup_if_missing_or_empty(RESULTS_FILE, minimum_rows=1)
+        try:
+            _bootstrap_local_csv_from_sheets_if_missing()
+        except Exception:
+            pass
     if not RESULTS_FILE.exists():
         return pd.DataFrame(columns=RESULT_FIELDNAMES)
     try:
         df = pd.read_csv(RESULTS_FILE, dtype=str, encoding="utf-8-sig")
     except Exception:
-        df = pd.read_csv(RESULTS_FILE, dtype=str, encoding="utf-8")
+        try:
+            df = pd.read_csv(RESULTS_FILE, dtype=str, encoding="utf-8")
+        except Exception:
+            _restore_from_latest_backup_if_missing_or_empty(RESULTS_FILE, minimum_rows=1)
+            return pd.DataFrame(columns=RESULT_FIELDNAMES)
     if df is None:
         return pd.DataFrame(columns=RESULT_FIELDNAMES)
     df = df.copy()
@@ -729,7 +1057,11 @@ def _upsert_final_result(row: dict) -> None:
     if "ended_at" in df.columns:
         df["_ended_sort"] = pd.to_datetime(df["ended_at"], errors="coerce")
         df = df.sort_values("_ended_sort", ascending=False).drop(columns=["_ended_sort"])
-    df.to_csv(RESULTS_FILE, index=False, encoding="utf-8-sig")
+    _safe_results_write(df)
+    try:
+        _gsheets_sync_result_row(row)
+    except Exception:
+        pass
 
 def save_final_result_if_needed(force: bool = False) -> None:
     if st.session_state.get("final_result_saved", False) and not force:
@@ -1544,11 +1876,7 @@ def _ensure_log_schema_file():
         return
 
     rows = _read_log_rows_tolerant()
-    with open(LOG_FILE, "w", newline="", encoding="utf-8-sig") as f:
-        writer = csv.DictWriter(f, fieldnames=LOG_FIELDNAMES)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow(_normalize_log_row(row))
+    _safe_log_rewrite(rows)
 
 
 def _coerce_log_df(df: pd.DataFrame) -> pd.DataFrame:
@@ -1976,6 +2304,10 @@ def append_attempt_log(mission_key: str, q_idx: int, q_type: str, payload: dict)
             if not file_exists:
                 writer.writeheader()
             writer.writerow(row)
+        try:
+            _gsheets_sync_log_row(row)
+        except Exception:
+            pass
     except Exception as e:
         st.session_state.log_write_error = str(e)
 
@@ -2554,27 +2886,6 @@ def _build_participant_snapshot(df: pd.DataFrame):
     }
 
 
-
-def _list_backup_files(base_dir: Path, patterns=None):
-    patterns = patterns or ["training_results.csv.bak_*", "compliance_training_log.csv.bak_*"]
-    files = []
-    for pattern in patterns:
-        files.extend(base_dir.glob(pattern))
-    files = [p for p in files if p.is_file()]
-    files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    rows = []
-    for p in files:
-        st_mtime = datetime.fromtimestamp(p.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")
-        rows.append({
-            "파일명": p.name,
-            "크기(KB)": round(p.stat().st_size / 1024, 1),
-            "수정시각": st_mtime,
-            "경로": str(p.resolve()),
-            "_path": p,
-        })
-    return rows
-
-
 def render_admin_password_gate():
     st.markdown(
         """
@@ -2651,6 +2962,37 @@ def render_admin_page():
             st.caption("※ 참여율점수는 목표 대비 참여율(%)을 기준으로 산정됩니다. org_targets.csv가 없으면 참여율 관련 값은 비어 있을 수 있습니다.")
 
     with tab_log:
+        status = _storage_status()
+        gs_on = _gsheets_enabled()
+        st.markdown("### 🛡 데이터 보호 현황")
+        st.info(
+            "현재 버전은 CSV 급감 저장 차단, 저장 전 자동 백업, 백업 복구, Google Sheets 동시 적재(설정 시) 방식으로 "
+            "남은 운영기간 동안 데이터 유실 위험을 낮추도록 보강되었습니다."
+        )
+        c1, c2, c3 = st.columns(3)
+        c1.metric("결과 CSV 행수", status["results_rows"])
+        c2.metric("결과 백업 수", status["results_backups"])
+        c3.metric("Google Sheets", "연결됨" if gs_on else "미연결")
+        with st.expander("예방 계획 및 현재 경로 확인", expanded=False):
+            st.write("- 결과 파일은 기존 파일을 우선 사용하고, 저장 전 자동 백업 후 원자적으로 교체합니다.")
+            st.write("- 기존 대비 행 수가 급감하면 저장을 차단해 대량 손실을 막습니다.")
+            st.write("- Google Sheets가 연결되면 로그/최종결과를 동시에 적재합니다.")
+            st.code(
+                f"RESULTS_FILE: {status['results_path']}\nLOG_FILE: {status['log_path']}",
+                language="text"
+            )
+        bak_rows = []
+        for p in _backup_glob(RESULTS_FILE)[:20]:
+            bak_rows.append({
+                "파일명": p.name,
+                "행수": _count_csv_rows(p),
+                "크기(KB)": round(p.stat().st_size / 1024, 1),
+                "수정시각": datetime.fromtimestamp(p.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S"),
+            })
+        if bak_rows:
+            st.markdown("#### 🗂 결과 백업 파일 목록")
+            st.dataframe(pd.DataFrame(bak_rows), use_container_width=True, hide_index=True)
+
         df = _load_results_df()
         if df.empty:
             st.info("최종 결과 로그(training_results.csv)가 없습니다.")
@@ -2670,40 +3012,6 @@ def render_admin_page():
                 mime="text/csv",
                 use_container_width=True,
             )
-
-        st.markdown("---")
-        st.subheader("🗂 백업 파일 목록")
-        backup_rows = _list_backup_files(BASE_DIR)
-        if not backup_rows:
-            st.info("현재 app.py 실행 폴더(BASE_DIR)에서 확인된 CSV 백업 파일이 없습니다.")
-            try:
-                st.caption(f"확인 경로: {BASE_DIR.resolve()}")
-            except Exception:
-                st.caption(f"확인 경로: {BASE_DIR}")
-        else:
-            backup_df = pd.DataFrame([{k: v for k, v in row.items() if k != "_path"} for row in backup_rows])
-            st.dataframe(backup_df, use_container_width=True, hide_index=True)
-            try:
-                st.caption(f"확인 경로: {BASE_DIR.resolve()}")
-            except Exception:
-                st.caption(f"확인 경로: {BASE_DIR}")
-
-            for i, row in enumerate(backup_rows):
-                p = row["_path"]
-                with st.expander(f"📁 {row['파일명']} | {row['수정시각']} | {row['크기(KB)']} KB", expanded=False):
-                    st.code(str(p.resolve()))
-                    try:
-                        data = p.read_bytes()
-                        st.download_button(
-                            label=f"⬇️ 백업 다운로드 {i+1}",
-                            data=data,
-                            file_name=p.name,
-                            mime="text/csv",
-                            key=f"backup_download_{i}_{p.name}",
-                            use_container_width=True,
-                        )
-                    except Exception as e:
-                        st.error(f"백업 파일을 읽을 수 없습니다: {e}")
 
 
 
