@@ -41,7 +41,6 @@ import re
 import difflib
 import html
 import random
-import shutil
 
 # =========================================================
 # 1) 페이지 설정 / 스타일
@@ -453,6 +452,13 @@ div[data-testid="stDialog"] button[kind="header"] svg {
     text-shadow: 0 0 8px rgba(212,175,55,0.14) !important;
     white-space: normal;
 }
+
+/* Gold text (no bright blur) */
+.gold-text {
+    color: #D4AF37 !important;
+    font-weight: 900 !important;
+    text-shadow: 0 0 6px rgba(212,175,55,0.10) !important;
+}
 .brief-chip.gold-chip {
     border-color: rgba(212,175,55,0.55) !important;
     color: #D4AF37 !important;
@@ -679,36 +685,6 @@ RESULT_FIELDNAMES = [
 ]
 
 
-def _backup_csv_if_exists(path: Path, keep_latest: int = 30) -> Path | None:
-    """CSV 원본을 덮어쓰기 전에 자동 백업(.bak_YYYYMMDD_HHMMSS) 생성.
-
-    - 파일이 없으면 백업하지 않음
-    - 최근 keep_latest개만 유지하고 나머지는 정리
-    """
-    try:
-        if not path.exists() or not path.is_file():
-            return None
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_path = path.with_name(f"{path.name}.bak_{ts}")
-        shutil.copy2(path, backup_path)
-
-        if keep_latest and keep_latest > 0:
-            pattern = f"{path.name}.bak_*"
-            backups = sorted(
-                [bp for bp in path.parent.glob(pattern) if bp.is_file()],
-                key=lambda x: x.stat().st_mtime,
-                reverse=True,
-            )
-            for old in backups[keep_latest:]:
-                try:
-                    old.unlink()
-                except Exception:
-                    pass
-        return backup_path
-    except Exception:
-        return None
-
-
 # =========================
 # Final Results (1인 1레코드)
 # =========================
@@ -753,7 +729,6 @@ def _upsert_final_result(row: dict) -> None:
     if "ended_at" in df.columns:
         df["_ended_sort"] = pd.to_datetime(df["ended_at"], errors="coerce")
         df = df.sort_values("_ended_sort", ascending=False).drop(columns=["_ended_sort"])
-    _backup_csv_if_exists(RESULTS_FILE)
     df.to_csv(RESULTS_FILE, index=False, encoding="utf-8-sig")
 
 def save_final_result_if_needed(force: bool = False) -> None:
@@ -1569,7 +1544,6 @@ def _ensure_log_schema_file():
         return
 
     rows = _read_log_rows_tolerant()
-    _backup_csv_if_exists(LOG_FILE)
     with open(LOG_FILE, "w", newline="", encoding="utf-8-sig") as f:
         writer = csv.DictWriter(f, fieldnames=LOG_FIELDNAMES)
         writer.writeheader()
@@ -2580,6 +2554,27 @@ def _build_participant_snapshot(df: pd.DataFrame):
     }
 
 
+
+def _list_backup_files(base_dir: Path, patterns=None):
+    patterns = patterns or ["training_results.csv.bak_*", "compliance_training_log.csv.bak_*"]
+    files = []
+    for pattern in patterns:
+        files.extend(base_dir.glob(pattern))
+    files = [p for p in files if p.is_file()]
+    files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    rows = []
+    for p in files:
+        st_mtime = datetime.fromtimestamp(p.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+        rows.append({
+            "파일명": p.name,
+            "크기(KB)": round(p.stat().st_size / 1024, 1),
+            "수정시각": st_mtime,
+            "경로": str(p.resolve()),
+            "_path": p,
+        })
+    return rows
+
+
 def render_admin_password_gate():
     st.markdown(
         """
@@ -2675,6 +2670,40 @@ def render_admin_page():
                 mime="text/csv",
                 use_container_width=True,
             )
+
+        st.markdown("---")
+        st.subheader("🗂 백업 파일 목록")
+        backup_rows = _list_backup_files(BASE_DIR)
+        if not backup_rows:
+            st.info("현재 app.py 실행 폴더(BASE_DIR)에서 확인된 CSV 백업 파일이 없습니다.")
+            try:
+                st.caption(f"확인 경로: {BASE_DIR.resolve()}")
+            except Exception:
+                st.caption(f"확인 경로: {BASE_DIR}")
+        else:
+            backup_df = pd.DataFrame([{k: v for k, v in row.items() if k != "_path"} for row in backup_rows])
+            st.dataframe(backup_df, use_container_width=True, hide_index=True)
+            try:
+                st.caption(f"확인 경로: {BASE_DIR.resolve()}")
+            except Exception:
+                st.caption(f"확인 경로: {BASE_DIR}")
+
+            for i, row in enumerate(backup_rows):
+                p = row["_path"]
+                with st.expander(f"📁 {row['파일명']} | {row['수정시각']} | {row['크기(KB)']} KB", expanded=False):
+                    st.code(str(p.resolve()))
+                    try:
+                        data = p.read_bytes()
+                        st.download_button(
+                            label=f"⬇️ 백업 다운로드 {i+1}",
+                            data=data,
+                            file_name=p.name,
+                            mime="text/csv",
+                            key=f"backup_download_{i}_{p.name}",
+                            use_container_width=True,
+                        )
+                    except Exception as e:
+                        st.error(f"백업 파일을 읽을 수 없습니다: {e}")
 
 
 
@@ -3210,7 +3239,7 @@ def render_quiz_navigation_controls(m_key: str):
         else:
             all_submitted = len(submissions) == total_q
             mark_theme_complete_if_ready(m_key)
-            if st.button("🏁 테마 정복 완료! 맵으로 돌아가기", key=f"nav_finish_{m_key}", use_container_width=True, disabled=(not all_submitted)):
+            if safe_button("🏁 테마 정복 완료! 맵으로 돌아가기", key=f"nav_finish_{m_key}", use_container_width=True, disabled=(not all_submitted), primary=True):
                 st.session_state.stage = "map"
                 st.rerun()
 
@@ -3350,8 +3379,8 @@ try:
         st.markdown(
             """
             <div class='card'>
-              <div class='card-title'>게임 방식</div>
-              <div>맵에서 테마를 선택 → 핵심 브리핑 학습 → 퀴즈(4지선다 + 주관식) → 정복 완료!</div>
+              <div class='card-title gold-text'>교육 방식</div>
+              <div class='gold-text'>Select a theme from the map → Study the core briefing → Quiz (4 choices + short answer) → Conquer completed!</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -3433,7 +3462,7 @@ try:
             _render_confirm_readonly_field(col_c, '소속 기관', selected_emp.get('organization', ''))
 
             st.markdown("<div style='height:6px;'></div>", unsafe_allow_html=True)
-            if st.button('모험 시작하기', use_container_width=True):
+            if safe_button('모험 시작하기', use_container_width=True, primary=True):
                 emp_no = str(selected_emp.get('employee_no', '')).strip()
                 emp_name = str(selected_emp.get('name', '')).strip()
                 emp_org = str(selected_emp.get('organization', '')).strip() or '미분류'
