@@ -45,7 +45,7 @@ import random
 # =========================================================
 # 1) 페이지 설정 / 스타일
 # =========================================================
-st.set_page_config(page_title="2026 Compliance Adventure", layout="wide")
+st.set_page_config(page_title="2026 컴플라이언스 어드벤처", layout="wide")
 
 st.markdown("""
 <style>
@@ -688,173 +688,121 @@ RESULT_FIELDNAMES = [
 # =========================
 # Final Results (1인 1레코드)
 # =========================
+def _normalize_result_columns(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame(columns=RESULT_FIELDNAMES)
+    df = df.copy()
+    rename_map = {
+        "사번": "employee_no",
+        "이름": "name",
+        "이름.1": "name",
+        "소속기관": "organization",
+        "참여시각": "participated_at",
+        "종료시각": "ended_at",
+        "참여시간(초)": "duration_sec",
+        "최종점수": "final_score",
+        "득점률(%)": "score_rate",
+        "등급": "grade",
+        "시도ID": "training_attempt_id",
+        "회차": "attempt_round",
+    }
+    for src, dst in rename_map.items():
+        if src in df.columns and dst not in df.columns:
+            df[dst] = df[src]
+    for c in RESULT_FIELDNAMES:
+        if c not in df.columns:
+            df[c] = ""
+    out = df[RESULT_FIELDNAMES].copy()
+    for c in out.columns:
+        out[c] = out[c].fillna("").astype(str)
+    return out
+
+def _load_backup_results_from_log_file() -> pd.DataFrame:
+    backup_path = BASE_DIR / "compliance_training_log.csv"
+    if not backup_path.exists():
+        return pd.DataFrame(columns=RESULT_FIELDNAMES)
+    try:
+        raw = pd.read_csv(backup_path, dtype=str, encoding="utf-8-sig")
+    except Exception:
+        try:
+            raw = pd.read_csv(backup_path, dtype=str, encoding="utf-8")
+        except Exception:
+            return pd.DataFrame(columns=RESULT_FIELDNAMES)
+    if raw is None or raw.empty:
+        return pd.DataFrame(columns=RESULT_FIELDNAMES)
+    # 최종결과형 백업만 사용
+    required = {"사번", "소속기관", "참여시각", "종료시각", "최종점수", "득점률(%)"}
+    if not required.issubset(set(raw.columns)):
+        return pd.DataFrame(columns=RESULT_FIELDNAMES)
+    return _normalize_result_columns(raw)
+
+def _merge_result_sources(primary_df: pd.DataFrame, backup_df: pd.DataFrame) -> pd.DataFrame:
+    frames = []
+    if primary_df is not None and not primary_df.empty:
+        frames.append(_normalize_result_columns(primary_df))
+    if backup_df is not None and not backup_df.empty:
+        frames.append(_normalize_result_columns(backup_df))
+    if not frames:
+        return pd.DataFrame(columns=RESULT_FIELDNAMES)
+    df = pd.concat(frames, ignore_index=True)
+    df["employee_no"] = df["employee_no"].fillna("").astype(str).str.strip()
+    df["name"] = df["name"].fillna("").astype(str).str.strip()
+    df["organization"] = df["organization"].fillna("").astype(str).str.strip()
+    df["_ended_sort"] = pd.to_datetime(df["ended_at"], errors="coerce")
+    df["_key"] = df["employee_no"]
+    no_emp = df["_key"].eq("")
+    df.loc[no_emp, "_key"] = (df.loc[no_emp, "organization"] + "|" + df.loc[no_emp, "name"]).str.strip("|")
+    df = df.sort_values(["_key", "_ended_sort"], ascending=[True, False]).drop_duplicates(subset=["_key"], keep="first")
+    return df[RESULT_FIELDNAMES].copy()
+
+def _load_export_scoreboard() -> pd.DataFrame:
+    export_path = BASE_DIR / "2026-03-11T12-16_export.csv"
+    cols = ["rank","organization","participants","target","participation_rate","participation_rate_score","avg_score_rate","cumulative_score","score_sum_rate","last_activity"]
+    if not export_path.exists():
+        return pd.DataFrame(columns=cols)
+    try:
+        raw = pd.read_csv(export_path, dtype=str, encoding="utf-8-sig")
+    except Exception:
+        try:
+            raw = pd.read_csv(export_path, dtype=str, encoding="utf-8")
+        except Exception:
+            return pd.DataFrame(columns=cols)
+    if raw is None or raw.empty:
+        return pd.DataFrame(columns=cols)
+    mapping = {
+        "순위": "rank", "기관": "organization", "참여자(명)": "participants", "목표(명)": "target",
+        "참여율(%)": "participation_rate", "참여율점수": "participation_rate_score", "평균점수(%)": "avg_score_rate",
+        "누적점수(=참여율점수+평균점수)": "cumulative_score", "점수합계(%)": "score_sum_rate", "최근 종료": "last_activity",
+    }
+    df = raw.rename(columns=mapping).copy()
+    for c in cols:
+        if c not in df.columns:
+            df[c] = ""
+    for c in ["participants","target","participation_rate","participation_rate_score","avg_score_rate","cumulative_score","score_sum_rate"]:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+    df["organization"] = df["organization"].fillna("").astype(str).str.strip()
+    df = df[df["organization"] != ""].copy()
+    return df[cols].copy()
+
 def _ensure_results_file():
     if not RESULTS_FILE.exists():
         with RESULTS_FILE.open("w", newline="", encoding="utf-8-sig") as f:
             w = csv.DictWriter(f, fieldnames=RESULT_FIELDNAMES)
             w.writeheader()
 
-
-def _normalize_empno_for_results(value) -> str:
-    s = str(value or "").strip()
-    if s.endswith(".0"):
-        s = s[:-2]
-    return s
-
-def _normalize_name_for_results(value) -> str:
-    return str(value or "").strip()
-
-def _normalize_org_for_results(value) -> str:
-    s = str(value or "").strip()
-    return s or "미분류"
-
-def _participant_key_from_row(row: pd.Series) -> str:
-    emp = _normalize_empno_for_results(row.get("employee_no", ""))
-    if emp:
-        return emp
-    org = _normalize_org_for_results(row.get("organization", ""))
-    name = _normalize_name_for_results(row.get("name", "")).replace(" ", "")
-    return f"{org}|{name}"
-
-def _read_participant_backup_results() -> pd.DataFrame:
-    """백업 파일(compliance_training_log.csv / training_results.csv.bak_*)을 최종결과 형식으로 읽는다."""
-    frames = []
-
-    # 1) 최종결과 백업
-    for fp in sorted(BASE_DIR.glob("training_results.csv.bak_*")):
-        try:
-            raw = pd.read_csv(fp, dtype=str, encoding="utf-8-sig")
-        except Exception:
-            try:
-                raw = pd.read_csv(fp, dtype=str, encoding="utf-8")
-            except Exception:
-                continue
-        if raw is None or raw.empty:
-            continue
-        if set(RESULT_FIELDNAMES).issubset(set(map(str, raw.columns))):
-            df = raw.copy()
-            for c in RESULT_FIELDNAMES:
-                if c not in df.columns:
-                    df[c] = ""
-            frames.append(df[RESULT_FIELDNAMES].copy())
-
-    # 2) 현재 업로드된 compliance_training_log.csv 는 실제로 1인 1레코드 백업 구조
-    for fp in sorted(BASE_DIR.glob("compliance_training_log*.csv")):
-        try:
-            raw = pd.read_csv(fp, dtype=str, encoding="utf-8-sig")
-        except Exception:
-            try:
-                raw = pd.read_csv(fp, dtype=str, encoding="utf-8")
-            except Exception:
-                continue
-        if raw is None or raw.empty:
-            continue
-        cols = set(map(str, raw.columns))
-        if {"사번","소속기관","참여시각","종료시각","참여시간(초)","최종점수","득점률(%)","등급","시도ID","회차"}.issubset(cols):
-            name_col = "이름.1" if "이름.1" in raw.columns else ("이름" if "이름" in raw.columns else "")
-            df = pd.DataFrame({
-                "employee_no": raw.get("사번", ""),
-                "name": raw.get(name_col, ""),
-                "organization": raw.get("소속기관", ""),
-                "participated_at": raw.get("참여시각", ""),
-                "ended_at": raw.get("종료시각", ""),
-                "duration_sec": raw.get("참여시간(초)", ""),
-                "final_score": raw.get("최종점수", ""),
-                "score_rate": raw.get("득점률(%)", ""),
-                "grade": raw.get("등급", ""),
-                "training_attempt_id": raw.get("시도ID", ""),
-                "attempt_round": raw.get("회차", ""),
-            })
-            frames.append(df[RESULT_FIELDNAMES].copy())
-
-    if not frames:
-        return pd.DataFrame(columns=RESULT_FIELDNAMES)
-
-    merged = pd.concat(frames, ignore_index=True)
-    for c in RESULT_FIELDNAMES:
-        if c not in merged.columns:
-            merged[c] = ""
-    merged["employee_no"] = merged["employee_no"].apply(_normalize_empno_for_results)
-    merged["name"] = merged["name"].apply(_normalize_name_for_results)
-    merged["organization"] = merged["organization"].apply(_normalize_org_for_results)
-    merged["_ended_sort"] = pd.to_datetime(merged["ended_at"], errors="coerce")
-    merged["_participant_key"] = merged.apply(_participant_key_from_row, axis=1)
-    merged = merged.sort_values("_ended_sort", ascending=False).drop_duplicates(subset=["_participant_key"], keep="first")
-    merged = merged.drop(columns=["_ended_sort", "_participant_key"], errors="ignore")
-    return merged[RESULT_FIELDNAMES].copy()
-
-def _create_results_backup():
-    if RESULTS_FILE.exists():
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        shutil.copy2(RESULTS_FILE, RESULTS_FILE.with_name(f"{RESULTS_FILE.name}.bak_{ts}"))
-
-def _load_org_export_backup_df() -> pd.DataFrame:
-    cols = [
-        "rank","organization","participants","target",
-        "participation_rate","participation_rate_score",
-        "avg_score_rate","cumulative_score","score_sum_rate",
-        "last_activity",
-    ]
-    for fp in sorted(BASE_DIR.glob("*_export.csv"), key=lambda x: x.stat().st_mtime, reverse=True):
-        try:
-            raw = pd.read_csv(fp, dtype=str, encoding="utf-8-sig")
-        except Exception:
-            try:
-                raw = pd.read_csv(fp, dtype=str, encoding="utf-8")
-            except Exception:
-                continue
-        if raw is None or raw.empty:
-            continue
-        need = {"순위","기관","참여자(명)","목표(명)","참여율(%)","참여율점수","평균점수(%)","누적점수(=참여율점수+평균점수)","점수합계(%)","최근 종료"}
-        if not need.issubset(set(map(str, raw.columns))):
-            continue
-        out = pd.DataFrame()
-        out["rank"] = pd.to_numeric(raw["순위"], errors="coerce")
-        out["organization"] = raw["기관"].apply(_normalize_org_for_results)
-        out["participants"] = pd.to_numeric(raw["참여자(명)"], errors="coerce").fillna(0).astype(int)
-        out["target"] = pd.to_numeric(raw["목표(명)"], errors="coerce").fillna(0).astype(int)
-        out["participation_rate"] = pd.to_numeric(raw["참여율(%)"], errors="coerce")
-        out["participation_rate_score"] = pd.to_numeric(raw["참여율점수"], errors="coerce")
-        out["avg_score_rate"] = pd.to_numeric(raw["평균점수(%)"], errors="coerce")
-        out["cumulative_score"] = pd.to_numeric(raw["누적점수(=참여율점수+평균점수)"], errors="coerce")
-        out["score_sum_rate"] = pd.to_numeric(raw["점수합계(%)"], errors="coerce")
-        out["last_activity"] = raw["최근 종료"].fillna("").astype(str).str.strip()
-        return out[cols]
-    return pd.DataFrame(columns=cols)
-
 def _load_results_df() -> pd.DataFrame:
-    """라이브 결과 + 백업 결과를 함께 읽어 1인 1레코드로 병합한다."""
-    frames = []
-
-    if RESULTS_FILE.exists():
-        try:
-            live_df = pd.read_csv(RESULTS_FILE, dtype=str, encoding="utf-8-sig")
-        except Exception:
-            try:
-                live_df = pd.read_csv(RESULTS_FILE, dtype=str, encoding="utf-8")
-            except Exception:
-                live_df = pd.DataFrame(columns=RESULT_FIELDNAMES)
-        if live_df is not None and not live_df.empty:
-            frames.append(live_df.copy())
-
-    backup_df = _read_participant_backup_results()
-    if backup_df is not None and not backup_df.empty:
-        frames.append(backup_df.copy())
-
-    if not frames:
+    if not RESULTS_FILE.exists():
         return pd.DataFrame(columns=RESULT_FIELDNAMES)
-
-    df = pd.concat(frames, ignore_index=True)
+    try:
+        df = pd.read_csv(RESULTS_FILE, dtype=str, encoding="utf-8-sig")
+    except Exception:
+        df = pd.read_csv(RESULTS_FILE, dtype=str, encoding="utf-8")
+    if df is None:
+        return pd.DataFrame(columns=RESULT_FIELDNAMES)
+    df = df.copy()
     for c in RESULT_FIELDNAMES:
         if c not in df.columns:
             df[c] = ""
-    df["employee_no"] = df["employee_no"].apply(_normalize_empno_for_results)
-    df["name"] = df["name"].apply(_normalize_name_for_results)
-    df["organization"] = df["organization"].apply(_normalize_org_for_results)
-    df["_ended_sort"] = pd.to_datetime(df["ended_at"], errors="coerce")
-    df["_participant_key"] = df.apply(_participant_key_from_row, axis=1)
-    df = df.sort_values("_ended_sort", ascending=False).drop_duplicates(subset=["_participant_key"], keep="first")
-    df = df.drop(columns=["_ended_sort", "_participant_key"], errors="ignore")
     return df[RESULT_FIELDNAMES].copy()
 
 def _has_completed(employee_no: str) -> bool:
@@ -869,25 +817,15 @@ def _has_completed(employee_no: str) -> bool:
 def _upsert_final_result(row: dict) -> None:
     _ensure_results_file()
     row = {k: ("" if row.get(k) is None else row.get(k)) for k in RESULT_FIELDNAMES}
-    row["employee_no"] = _normalize_empno_for_results(row.get("employee_no", ""))
-    row["name"] = _normalize_name_for_results(row.get("name", ""))
-    row["organization"] = _normalize_org_for_results(row.get("organization", ""))
-
     df = _load_results_df()
-    row_key = _participant_key_from_row(pd.Series(row))
-    if not df.empty:
-        df["_participant_key"] = df.apply(_participant_key_from_row, axis=1)
-        df = df[df["_participant_key"] != row_key].drop(columns=["_participant_key"], errors="ignore").copy()
-
+    emp = str(row.get("employee_no", "")).strip()
+    if emp:
+        df = df[df["employee_no"].astype(str).str.strip() != emp].copy()
     df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
     if "ended_at" in df.columns:
         df["_ended_sort"] = pd.to_datetime(df["ended_at"], errors="coerce")
         df = df.sort_values("_ended_sort", ascending=False).drop(columns=["_ended_sort"])
-
-    _create_results_backup()
-    tmp_path = RESULTS_FILE.with_suffix(".tmp.csv")
-    df.to_csv(tmp_path, index=False, encoding="utf-8-sig")
-    tmp_path.replace(RESULTS_FILE)
+    df.to_csv(RESULTS_FILE, index=False, encoding="utf-8-sig")
 
 def save_final_result_if_needed(force: bool = False) -> None:
     if st.session_state.get("final_result_saved", False) and not force:
@@ -2786,11 +2724,18 @@ def render_admin_page():
                 hide_index=True,
             )
             st.caption("※ 참여율점수는 목표 대비 참여율(%)을 기준으로 산정됩니다. org_targets.csv가 없으면 참여율 관련 값은 비어 있을 수 있습니다.")
+            total_participants = int(pd.to_numeric(sb["participants"], errors="coerce").fillna(0).sum())
+            total_target = int(pd.to_numeric(sb["target"], errors="coerce").fillna(0).sum())
+            overall_rate = round((total_participants / total_target) * 100.0, 1) if total_target > 0 else None
+            overall_avg = round(pd.to_numeric(sb["avg_score_rate"], errors="coerce").fillna(0).mean(), 1) if not sb.empty else 0.0
+            overall_cum = round(pd.to_numeric(sb["cumulative_score"], errors="coerce").fillna(0).mean(), 1) if not sb.empty else 0.0
+            recent_end = str(sb["last_activity"].dropna().astype(str).max()) if not sb.empty else ""
+            st.markdown(f"**누적 전체 통계**  · 총 기관 수: {len(sb)}  · 총 참여자: {total_participants}명  · 총 목표: {total_target}명  · 전체 참여율: {overall_rate if overall_rate is not None else '-'}%  · 전체 평균점수: {overall_avg}%  · 전체 누적점수: {overall_cum}  · 최근 종료: {recent_end or '-'}")
 
     with tab_log:
         df = _load_results_df()
         if df.empty:
-            st.info("최종 결과 로그(training_results.csv)가 없습니다.")
+            st.info("최종 결과 로그가 없습니다. 같은 폴더의 training_results.csv 또는 compliance_training_log.csv를 확인해주세요.")
         else:
             st.subheader("참가자 최종 결과 (1인 1레코드)")
             show = df.rename(columns={
@@ -2800,6 +2745,12 @@ def render_admin_page():
                 "training_attempt_id":"시도ID","attempt_round":"회차"
             })
             st.dataframe(show, use_container_width=True, hide_index=True)
+            total_people = len(show)
+            avg_final = round(pd.to_numeric(df["final_score"], errors="coerce").fillna(0).mean(), 1) if not df.empty else 0.0
+            avg_rate = round(pd.to_numeric(df["score_rate"], errors="coerce").fillna(0).mean(), 1) if not df.empty else 0.0
+            total_dur = int(pd.to_numeric(df["duration_sec"], errors="coerce").fillna(0).sum()) if not df.empty else 0
+            recent_end = str(df["ended_at"].dropna().astype(str).max()) if not df.empty else ""
+            st.markdown(f"**누적 전체 통계**  · 총 참가자: {total_people}명  · 평균 최종점수: {avg_final}점  · 평균 득점률: {avg_rate}%  · 총 참여시간: {total_dur}초  · 최근 종료: {recent_end or '-'}")
             st.download_button(
                 "📥 최종 결과 로그 다운로드 (CSV)",
                 data=show.to_csv(index=False).encode("utf-8-sig"),
@@ -3476,14 +3427,14 @@ try:
             st.info("맵 이미지를 추가하면 인트로 연출이 더 좋아집니다.")
 
         st.markdown("<div style='height:10px;'></div>", unsafe_allow_html=True)
-        st.title("🛡️ 2026 Compliance Adventure")
-        st.caption("Guardian Training · 컴플라이언스 테마 정복형 학습")
+        st.title("🛡️ 2026 컴플라이언스 어드벤처")
+        st.caption("가디언 교육 · 컴플라이언스 테마 정복형 학습")
 
         st.markdown(
             """
             <div class='card'>
               <div class='card-title gold-text'>교육 방식</div>
-              <div class='gold-text'>Select a theme from the map → Study the core briefing → Quiz (4 choices + short answer) → Conquer completed!</div>
+              <div class='gold-text'>지도에서 테마 선택 → 핵심 브리핑 학습 → 퀴즈 풀이(4지선다 + 단답형) → 정복 완료!</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -3703,7 +3654,7 @@ try:
         wrong_like = sum(1 for r in st.session_state.attempt_history if str(r.get("is_correct", "")) in ["N", "PARTIAL"])
 
         st.balloons()
-        st.title("🏆 Guardian Training Complete")
+        st.title("🏆 가디언 교육 완료")
         st.success(f"{user_name} 가디언님, 모든 테마를 정복했습니다!")
 
         _ending_img = get_ending_image()
