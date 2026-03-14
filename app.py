@@ -45,7 +45,7 @@ import random
 # =========================================================
 # 1) 페이지 설정 / 스타일
 # =========================================================
-st.set_page_config(page_title="2026 Compliance Adventure", layout="wide")
+st.set_page_config(page_title="2026 컴플라이언스 어드벤처", layout="wide")
 
 st.markdown("""
 <style>
@@ -3448,7 +3448,7 @@ try:
             """
             <div class='card'>
               <div class='card-title gold-text'>교육 방식</div>
-              <div class='gold-text'>Select a theme from the map → Study the core briefing → Quiz (4 choices + short answer) → Conquer completed!</div>
+              <div class='gold-text'>지도에서 테마 선택 → 핵심 브리핑 학습 → 퀴즈 풀이(4지선다 + 단답형) → 정복 완료!</div>
             </div>
             """,
             unsafe_allow_html=True,
