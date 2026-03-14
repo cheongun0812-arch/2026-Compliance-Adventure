@@ -890,13 +890,97 @@ def _ensure_results_file():
             w = csv.DictWriter(f, fieldnames=RESULT_FIELDNAMES)
             w.writeheader()
 
+
+
+def _load_results_from_backup_sources() -> pd.DataFrame:
+    """training_results.csv가 없거나 비어 있을 때, 백업/상세 CSV에서 1인 1레코드 최종결과를 복원한다."""
+    candidates = []
+    seen = set()
+    patterns = [
+        'training_results.csv.bak_*',
+        '*최종결과*.csv',
+        'compliance_training_log.csv',
+        'compliance_training_log*.csv',
+    ]
+    for pattern in patterns:
+        for fp in BASE_DIR.glob(pattern):
+            if fp.name in seen:
+                continue
+            seen.add(fp.name)
+            candidates.append(fp)
+
+    best_df = pd.DataFrame(columns=RESULT_FIELDNAMES)
+    best_count = 0
+
+    for fp in candidates:
+        try:
+            raw = _safe_read_csv(fp, dtype=str)
+        except Exception:
+            continue
+        if raw is None or raw.empty:
+            continue
+        cols = {str(c).strip() for c in raw.columns}
+        df = None
+
+        # Case 1) already in final-result schema
+        if set(RESULT_FIELDNAMES).issubset(cols):
+            df = raw.copy()
+        # Case 2) Korean export schema for participant final results
+        elif {'사번','이름','소속기관','참여시각','종료시각','참여시간(초)','최종점수','득점률(%)','등급','시도ID','회차'}.issubset(cols):
+            df = pd.DataFrame({
+                'employee_no': raw.get('사번', ''),
+                'name': raw.get('이름.1', raw.get('이름', '')),
+                'organization': raw.get('소속기관', ''),
+                'participated_at': raw.get('참여시각', ''),
+                'ended_at': raw.get('종료시각', ''),
+                'duration_sec': raw.get('참여시간(초)', ''),
+                'final_score': raw.get('최종점수', ''),
+                'score_rate': raw.get('득점률(%)', ''),
+                'grade': raw.get('등급', ''),
+                'training_attempt_id': raw.get('시도ID', ''),
+                'attempt_round': raw.get('회차', ''),
+            })
+        else:
+            continue
+
+        if df is None or df.empty:
+            continue
+        for c in RESULT_FIELDNAMES:
+            if c not in df.columns:
+                df[c] = ''
+        if 'employee_no' in df.columns:
+            df['employee_no'] = df['employee_no'].apply(_normalize_empno)
+        if 'organization' in df.columns:
+            df['organization'] = df['organization'].apply(_normalize_org_name)
+        if 'name' in df.columns:
+            df['name'] = df['name'].fillna('').astype(str).str.strip()
+        if 'ended_at' in df.columns:
+            df['_ended_sort'] = pd.to_datetime(df['ended_at'], errors='coerce')
+        else:
+            df['_ended_sort'] = pd.NaT
+        df['_participant_key'] = df['employee_no']
+        no_emp = df['_participant_key'].fillna('').astype(str).str.strip().eq('')
+        df.loc[no_emp, '_participant_key'] = (
+            df.loc[no_emp, 'organization'].fillna('').astype(str).str.strip() + '|' +
+            df.loc[no_emp, 'name'].fillna('').astype(str).str.strip().str.replace(' ', '', regex=False)
+        )
+        df = df.sort_values('_ended_sort', ascending=False).drop_duplicates(subset=['_participant_key'], keep='first')
+        df = df.drop(columns=['_ended_sort','_participant_key'], errors='ignore')
+        count = len(df)
+        if count > best_count:
+            best_count = count
+            best_df = df[RESULT_FIELDNAMES].copy()
+
+    return best_df
 def _load_results_df() -> pd.DataFrame:
-    if not RESULTS_FILE.exists():
-        return pd.DataFrame(columns=RESULT_FIELDNAMES)
-    try:
-        df = _safe_read_csv(RESULTS_FILE, dtype=str)
-    except Exception:
-        return pd.DataFrame(columns=RESULT_FIELDNAMES)
+    df = pd.DataFrame(columns=RESULT_FIELDNAMES)
+    if RESULTS_FILE.exists():
+        try:
+            df = _safe_read_csv(RESULTS_FILE, dtype=str)
+        except Exception:
+            df = pd.DataFrame(columns=RESULT_FIELDNAMES)
+    if df is None or df.empty:
+        df = _load_results_from_backup_sources()
     if df is None:
         return pd.DataFrame(columns=RESULT_FIELDNAMES)
     df = df.copy()
@@ -1085,6 +1169,74 @@ def compute_org_scoreboard() -> pd.DataFrame:
     return merged[cols] if not merged.empty else pd.DataFrame(columns=cols)
 
 
+
+
+def _build_org_overall_summary(sb: pd.DataFrame) -> dict:
+    """기관 전광판 전체 누적 통계 계산."""
+    if sb is None or sb.empty:
+        return {}
+    work = sb.copy()
+    for col in ["participants","target","participation_rate","participation_rate_score","avg_score_rate","cumulative_score","score_sum_rate"]:
+        if col in work.columns:
+            work[col] = pd.to_numeric(work[col], errors="coerce")
+    total_orgs = int(len(work))
+    total_participants = int(work.get("participants", pd.Series(dtype=float)).fillna(0).sum())
+    total_target = int(work.get("target", pd.Series(dtype=float)).fillna(0).sum())
+    overall_participation_rate = round((total_participants / total_target) * 100.0, 1) if total_target > 0 else np.nan
+
+    participants_series = work.get("participants", pd.Series(dtype=float)).fillna(0)
+    total_weight = float(participants_series.sum())
+    avg_score_series = work.get("avg_score_rate", pd.Series(dtype=float)).fillna(0)
+    weighted_avg_score = round(float((avg_score_series * participants_series).sum() / total_weight), 1) if total_weight > 0 else 0.0
+
+    participation_rate_score = round(_participation_rate_score(overall_participation_rate), 1) if pd.notna(overall_participation_rate) else np.nan
+    cumulative_score = round((0.0 if pd.isna(participation_rate_score) else float(participation_rate_score)) + float(weighted_avg_score), 1)
+    score_sum_rate = round(float(work.get("score_sum_rate", pd.Series(dtype=float)).fillna(0).sum()), 1)
+    last_activity = "-"
+    if "last_activity" in work.columns:
+        non_empty = work["last_activity"].fillna("").astype(str).str.strip()
+        non_empty = non_empty[non_empty != ""]
+        if not non_empty.empty:
+            last_activity = str(non_empty.max())
+
+    return {
+        "기관수": total_orgs,
+        "총 참여자(명)": total_participants,
+        "총 목표(명)": total_target,
+        "전체 참여율(%)": overall_participation_rate,
+        "전체 참여율점수": participation_rate_score,
+        "전체 평균점수(%)": weighted_avg_score,
+        "전체 누적점수": cumulative_score,
+        "전체 점수합계(%)": score_sum_rate,
+        "최근 종료": last_activity,
+    }
+
+
+def _build_results_overall_summary(df: pd.DataFrame) -> dict:
+    """최종 결과 로그 전체 누적 통계 계산."""
+    if df is None or df.empty:
+        return {}
+    work = df.copy()
+    for col in ["final_score", "score_rate", "duration_sec"]:
+        if col in work.columns:
+            work[col] = pd.to_numeric(work[col], errors="coerce")
+    participant_count = int(len(work))
+    avg_final_score = round(float(work.get("final_score", pd.Series(dtype=float)).fillna(0).mean()), 1) if participant_count else 0.0
+    avg_score_rate = round(float(work.get("score_rate", pd.Series(dtype=float)).fillna(0).mean()), 1) if participant_count else 0.0
+    total_duration_sec = int(work.get("duration_sec", pd.Series(dtype=float)).fillna(0).sum())
+    last_ended = "-"
+    if "ended_at" in work.columns:
+        non_empty = work["ended_at"].fillna("").astype(str).str.strip()
+        non_empty = non_empty[non_empty != ""]
+        if not non_empty.empty:
+            last_ended = str(non_empty.max())
+    return {
+        "총 참가자(명)": participant_count,
+        "평균 최종점수": avg_final_score,
+        "평균 득점률(%)": avg_score_rate,
+        "총 참여시간(초)": total_duration_sec,
+        "최근 종료": last_ended,
+    }
 def render_org_electronic_board_sidebar():
     """좌측 사이드바 전광판(기관 현황).
 
@@ -2827,6 +2979,24 @@ def render_admin_page():
             )
             st.caption("※ 참여율점수는 목표 대비 참여율(%)을 기준으로 산정됩니다. org_targets.csv가 없으면 참여율 관련 값은 비어 있을 수 있습니다.")
 
+            overall = _build_org_overall_summary(sb)
+            if overall:
+                st.markdown("#### 누적 전체 통계")
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("총 기관 수", f"{overall['기관수']}개")
+                c2.metric("총 참여자", f"{overall['총 참여자(명)']}명")
+                c3.metric("총 목표", f"{overall['총 목표(명)']}명")
+                overall_pr = overall['전체 참여율(%)']
+                c4.metric("전체 참여율", "-" if pd.isna(overall_pr) else f"{float(overall_pr):.1f}%")
+
+                c5, c6, c7, c8 = st.columns(4)
+                prs = overall['전체 참여율점수']
+                c5.metric("전체 참여율점수", "-" if pd.isna(prs) else f"{float(prs):.1f}")
+                c6.metric("전체 평균점수", f"{float(overall['전체 평균점수(%)']):.1f}%")
+                c7.metric("전체 누적점수", f"{float(overall['전체 누적점수']):.1f}")
+                c8.metric("전체 점수합계", f"{float(overall['전체 점수합계(%)']):.1f}")
+                st.caption(f"최근 종료: {overall['최근 종료']}")
+
             backup_sb = _load_org_scoreboard_backup_df()
             if not backup_sb.empty:
                 with st.expander("기관 전광판 백업/보강 정보", expanded=False):
@@ -2845,8 +3015,10 @@ def render_admin_page():
     with tab_log:
         df = _load_results_df()
         if df.empty:
-            st.info("최종 결과 로그(training_results.csv)가 없습니다.")
+            st.info("최종 결과 로그(training_results.csv) 또는 백업 결과 CSV를 찾지 못했습니다.")
         else:
+            if not RESULTS_FILE.exists():
+                st.caption("※ training_results.csv가 없어 백업/상세 CSV 기준으로 최종 결과 로그를 복원해 표시 중입니다.")
             st.subheader("참가자 최종 결과 (1인 1레코드)")
             show = df.rename(columns={
                 "employee_no":"사번","name":"이름","organization":"소속기관",
@@ -2855,6 +3027,17 @@ def render_admin_page():
                 "training_attempt_id":"시도ID","attempt_round":"회차"
             })
             st.dataframe(show, use_container_width=True, hide_index=True)
+
+            overall_results = _build_results_overall_summary(df)
+            if overall_results:
+                st.markdown("#### 누적 전체 통계")
+                r1, r2, r3, r4 = st.columns(4)
+                r1.metric("총 참가자", f"{overall_results['총 참가자(명)']}명")
+                r2.metric("평균 최종점수", f"{float(overall_results['평균 최종점수']):.1f}")
+                r3.metric("평균 득점률", f"{float(overall_results['평균 득점률(%)']):.1f}%")
+                r4.metric("총 참여시간", f"{overall_results['총 참여시간(초)']}초")
+                st.caption(f"최근 종료: {overall_results['최근 종료']}")
+
             st.download_button(
                 "📥 최종 결과 로그 다운로드 (CSV)",
                 data=show.to_csv(index=False).encode("utf-8-sig"),
