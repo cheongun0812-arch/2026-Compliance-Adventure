@@ -42,15 +42,19 @@ import difflib
 import html
 import random
 import shutil
-import tempfile
-from typing import Optional
 
-try:
-    import gspread
-    from oauth2client.service_account import ServiceAccountCredentials
-except Exception:
-    gspread = None
-    ServiceAccountCredentials = None
+
+ORG_SCOREBOARD_EXPORT_REQUIRED_COLS = [
+    "순위", "기관", "참여자(명)", "목표(명)", "참여율(%)", "참여율점수",
+    "평균점수(%)", "누적점수(=참여율점수+평균점수)", "점수합계(%)", "최근 종료",
+]
+ORG_SCOREBOARD_BACKUP_PATTERNS = [
+    "*_export.csv",
+    "org_scoreboard_backup_*.csv",
+    "org_scoreboard_export_*.csv",
+]
+MAX_ORG_SCOREBOARD_BACKUPS = 30
+MAX_RESULT_BACKUPS = 30
 
 # =========================================================
 # 1) 페이지 설정 / 스타일
@@ -652,120 +656,194 @@ def safe_bar_chart(data, **kwargs):
 
 
 # =========================================================
-# 2) 파일 경로 / 에셋 / 데이터 보호 설정
+# 2) 파일 경로 / 에셋
+#    (이미지/사운드 모두 app.py와 같은 폴더에 있다고 가정)
 # =========================================================
 BASE_DIR = Path(__file__).parent if "__file__" in globals() else Path.cwd()
 ASSET_DIR = BASE_DIR
-DATA_DIR = BASE_DIR / "data"
-DATA_DIR.mkdir(parents=True, exist_ok=True)
-BACKUP_KEEP_FILES = 80
-MIN_RESULTS_SHRINK_RATIO = 0.70  # 기존 대비 30% 이상 급감 시 저장 차단
-MIN_RESULTS_GUARD_ROWS = 30      # 소량 데이터 구간은 shrink guard 미적용
 
-def _resolve_data_file(filename: str) -> Path:
-    """기존 파일을 최우선으로 유지하고, 없으면 data/ 폴더를 사용."""
-    legacy = BASE_DIR / filename
-    managed = DATA_DIR / filename
-    if legacy.exists():
-        return legacy
-    return managed
 
-def _backup_glob(path: Path):
-    return sorted(path.parent.glob(f"{path.name}.bak_*"), key=lambda p: p.stat().st_mtime, reverse=True)
+def _safe_read_csv(path: Path, **kwargs) -> pd.DataFrame:
+    try:
+        return pd.read_csv(path, encoding="utf-8-sig", **kwargs)
+    except Exception:
+        return pd.read_csv(path, encoding="utf-8", **kwargs)
 
-def _count_csv_rows(path: Path) -> int:
-    if not path.exists() or path.stat().st_size <= 0:
+
+def _timestamp_now() -> str:
+    return datetime.now().strftime("%Y%m%d_%H%M%S")
+
+
+def _create_timestamped_backup(path: Path, max_backups: int = 30) -> Path | None:
+    try:
+        if not path.exists() or path.stat().st_size <= 0:
+            return None
+        backup = path.with_name(f"{path.name}.bak_{_timestamp_now()}")
+        shutil.copy2(path, backup)
+        backups = sorted(path.parent.glob(f"{path.name}.bak_*"), key=lambda p: p.stat().st_mtime, reverse=True)
+        for old in backups[max_backups:]:
+            try:
+                old.unlink(missing_ok=True)
+            except Exception:
+                pass
+        return backup
+    except Exception:
+        return None
+
+
+def _safe_atomic_to_csv(df: pd.DataFrame, path: Path, **kwargs) -> None:
+    tmp = path.with_name(f".{path.name}.tmp")
+    df.to_csv(tmp, **kwargs)
+    os.replace(tmp, path)
+
+
+def _normalize_org_name(value) -> str:
+    return str(value or "").strip() or "미분류"
+
+
+def _normalize_empno(value) -> str:
+    s = str(value or "").strip()
+    if s.endswith('.0'):
+        s = s[:-2]
+    return s
+
+
+def _scoreboard_snapshot_total_participants(df: pd.DataFrame) -> int:
+    if df is None or df.empty or 'participants' not in df.columns:
         return 0
-    try:
-        with path.open("r", encoding="utf-8-sig", newline="") as f:
-            return max(sum(1 for _ in csv.reader(f)) - 1, 0)
-    except Exception:
-        try:
-            df = pd.read_csv(path, dtype=str, encoding="utf-8-sig")
-            return len(df)
-        except Exception:
-            return 0
+    return int(pd.to_numeric(df['participants'], errors='coerce').fillna(0).sum())
 
-def _make_backup(path: Path) -> Optional[Path]:
-    if not path.exists() or path.stat().st_size <= 0:
-        return None
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    bak = path.parent / f"{path.name}.bak_{ts}"
+
+def _load_org_scoreboard_backup_df() -> pd.DataFrame:
+    candidates = []
+    seen = set()
+    for pattern in ORG_SCOREBOARD_BACKUP_PATTERNS:
+        for p in BASE_DIR.glob(pattern):
+            if p.name in seen:
+                continue
+            seen.add(p.name)
+            candidates.append(p)
+    valid = []
+    for p in candidates:
+        try:
+            df = _safe_read_csv(p, dtype=str)
+        except Exception:
+            continue
+        if df is None or df.empty:
+            continue
+        cols = set(map(str, df.columns))
+        if set(ORG_SCOREBOARD_EXPORT_REQUIRED_COLS).issubset(cols):
+            valid.append((p, df))
+    if not valid:
+        return pd.DataFrame(columns=[
+            'rank','organization','participants','target','participation_rate',
+            'participation_rate_score','avg_score_rate','cumulative_score',
+            'score_sum_rate','last_activity'
+        ])
+    # choose the richest/latest snapshot
+    valid.sort(key=lambda item: (
+        pd.to_numeric(item[1].get('참여자(명)'), errors='coerce').fillna(0).sum(),
+        item[0].stat().st_mtime
+    ), reverse=True)
+    p, df = valid[0]
+    out = pd.DataFrame()
+    out['rank'] = pd.to_numeric(df['순위'], errors='coerce')
+    out['organization'] = df['기관'].apply(_normalize_org_name)
+    out['participants'] = pd.to_numeric(df['참여자(명)'], errors='coerce').fillna(0).astype(int)
+    out['target'] = pd.to_numeric(df['목표(명)'], errors='coerce').fillna(0).astype(int)
+    out['participation_rate'] = pd.to_numeric(df['참여율(%)'].astype(str).str.replace('%','', regex=False), errors='coerce')
+    out['participation_rate_score'] = pd.to_numeric(df['참여율점수'], errors='coerce')
+    out['avg_score_rate'] = pd.to_numeric(df['평균점수(%)'].astype(str).str.replace('%','', regex=False), errors='coerce')
+    out['cumulative_score'] = pd.to_numeric(df['누적점수(=참여율점수+평균점수)'], errors='coerce')
+    out['score_sum_rate'] = pd.to_numeric(df['점수합계(%)'].astype(str).str.replace('%','', regex=False), errors='coerce')
+    out['last_activity'] = df['최근 종료'].astype(str).str.strip()
+    out['_source_file'] = p.name
+    out['_source_mtime'] = datetime.fromtimestamp(p.stat().st_mtime).strftime('%Y-%m-%d %H:%M:%S')
+    return out
+
+
+def _merge_org_scoreboards(live_df: pd.DataFrame, backup_df: pd.DataFrame) -> pd.DataFrame:
+    cols = [
+        'rank','organization','participants','target','participation_rate','participation_rate_score',
+        'avg_score_rate','cumulative_score','score_sum_rate','last_activity'
+    ]
+    if (live_df is None or live_df.empty) and (backup_df is None or backup_df.empty):
+        return pd.DataFrame(columns=cols)
+    if live_df is None or live_df.empty:
+        result = backup_df.copy()
+    elif backup_df is None or backup_df.empty:
+        result = live_df.copy()
+    else:
+        live = live_df.copy()
+        backup = backup_df.copy()
+        live['organization'] = live['organization'].apply(_normalize_org_name)
+        backup['organization'] = backup['organization'].apply(_normalize_org_name)
+        merged = live.merge(backup, on='organization', how='outer', suffixes=('_live', '_backup'))
+        rows = []
+        for _, r in merged.iterrows():
+            live_part = pd.to_numeric(pd.Series([r.get('participants_live')]), errors='coerce').fillna(-1).iloc[0]
+            back_part = pd.to_numeric(pd.Series([r.get('participants_backup')]), errors='coerce').fillna(-1).iloc[0]
+            use_backup = back_part > live_part
+            row = {'organization': r.get('organization', '미분류')}
+            for c in ['participants','target','participation_rate','participation_rate_score','avg_score_rate','cumulative_score','score_sum_rate','last_activity']:
+                row[c] = r.get(f'{c}_backup') if use_backup else r.get(f'{c}_live')
+                if (pd.isna(row[c]) or row[c] in [None, '']) and not use_backup:
+                    row[c] = r.get(f'{c}_backup')
+                if (pd.isna(row[c]) or row[c] in [None, '']) and use_backup:
+                    row[c] = r.get(f'{c}_live')
+            rows.append(row)
+        result = pd.DataFrame(rows)
+    if result.empty:
+        return pd.DataFrame(columns=cols)
+    for c in ['participants','target']:
+        result[c] = pd.to_numeric(result[c], errors='coerce').fillna(0).astype(int)
+    for c in ['participation_rate','participation_rate_score','avg_score_rate','cumulative_score','score_sum_rate']:
+        result[c] = pd.to_numeric(result[c], errors='coerce')
+    result['organization'] = result['organization'].apply(_normalize_org_name)
+    result['_cum'] = pd.to_numeric(result['cumulative_score'], errors='coerce').fillna(0.0)
+    result['_prs'] = pd.to_numeric(result['participation_rate_score'], errors='coerce').fillna(0.0)
+    result['_avg'] = pd.to_numeric(result['avg_score_rate'], errors='coerce').fillna(0.0)
+    result['_p'] = pd.to_numeric(result['participants'], errors='coerce').fillna(0)
+    result = result.sort_values(['_cum','_prs','_avg','_p'], ascending=[False,False,False,False]).reset_index(drop=True)
+    result['rank'] = np.arange(1, len(result) + 1)
+    result['avg_score_rate'] = result['avg_score_rate'].round(1)
+    result['score_sum_rate'] = result['score_sum_rate'].round(1)
+    result['participation_rate'] = result['participation_rate'].round(1)
+    result['participation_rate_score'] = result['participation_rate_score'].round(1)
+    result['cumulative_score'] = result['cumulative_score'].round(1)
+    result = result.drop(columns=['_cum','_prs','_avg','_p'], errors='ignore')
+    return result[cols]
+
+
+def _snapshot_org_scoreboard_if_needed(df: pd.DataFrame) -> Path | None:
     try:
-        shutil.copy2(path, bak)
-        for old in _backup_glob(path)[BACKUP_KEEP_FILES:]:
+        if df is None or df.empty:
+            return None
+        total = _scoreboard_snapshot_total_participants(df)
+        if total <= 0:
+            return None
+        existing = list(BASE_DIR.glob(f'org_scoreboard_backup_*_{total}p.csv'))
+        if existing:
+            return existing[0]
+        snap = df.rename(columns={
+            'rank':'순위','organization':'기관','participants':'참여자(명)','target':'목표(명)',
+            'participation_rate':'참여율(%)','participation_rate_score':'참여율점수',
+            'avg_score_rate':'평균점수(%)','cumulative_score':'누적점수(=참여율점수+평균점수)',
+            'score_sum_rate':'점수합계(%)','last_activity':'최근 종료'
+        }).copy()
+        path = BASE_DIR / f'org_scoreboard_backup_{_timestamp_now()}_{total}p.csv'
+        snap.to_csv(path, index=False, encoding='utf-8-sig')
+        backups = sorted(BASE_DIR.glob('org_scoreboard_backup_*.csv'), key=lambda p: p.stat().st_mtime, reverse=True)
+        for old in backups[MAX_ORG_SCOREBOARD_BACKUPS:]:
             try:
-                old.unlink()
+                old.unlink(missing_ok=True)
             except Exception:
                 pass
-        return bak
+        return path
     except Exception:
         return None
 
-def _atomic_write_bytes(path: Path, payload: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(prefix=path.name + ".tmp_", dir=str(path.parent))
-    try:
-        with os.fdopen(fd, "wb") as tmp:
-            tmp.write(payload)
-            tmp.flush()
-            os.fsync(tmp.fileno())
-        os.replace(tmp_name, path)
-    except Exception:
-        try:
-            os.unlink(tmp_name)
-        except Exception:
-            pass
-        raise
-
-def _safe_results_write(df: pd.DataFrame) -> None:
-    path = RESULTS_FILE
-    old_rows = _count_csv_rows(path)
-    new_rows = len(df)
-    if old_rows >= MIN_RESULTS_GUARD_ROWS and new_rows < int(old_rows * MIN_RESULTS_SHRINK_RATIO):
-        raise RuntimeError(
-            f"training_results.csv 저장 차단: 기존 {old_rows}건 → 신규 {new_rows}건으로 급감했습니다. "
-            "원본 보호를 위해 저장을 중단했습니다."
-        )
-    _make_backup(path)
-    payload = df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
-    _atomic_write_bytes(path, payload)
-
-def _safe_log_rewrite(rows: list[dict]) -> None:
-    path = LOG_FILE
-    _make_backup(path)
-    output = io.StringIO()
-    writer = csv.DictWriter(output, fieldnames=LOG_FIELDNAMES)
-    writer.writeheader()
-    for row in rows:
-        writer.writerow(_normalize_log_row(row))
-    _atomic_write_bytes(path, output.getvalue().encode("utf-8-sig"))
-
-def _restore_from_latest_backup_if_missing_or_empty(path: Path, minimum_rows: int = 1) -> bool:
-    current_rows = _count_csv_rows(path)
-    if path.exists() and current_rows >= minimum_rows:
-        return False
-    backups = _backup_glob(path)
-    for bak in backups:
-        if _count_csv_rows(bak) >= minimum_rows:
-            try:
-                shutil.copy2(bak, path)
-                return True
-            except Exception:
-                pass
-    return False
-
-def _storage_status() -> dict:
-    return {
-        "results_path": str(RESULTS_FILE.resolve()),
-        "results_rows": _count_csv_rows(RESULTS_FILE),
-        "results_backups": len(_backup_glob(RESULTS_FILE)),
-        "log_path": str(LOG_FILE.resolve()),
-        "log_rows": _count_csv_rows(LOG_FILE),
-        "log_backups": len(_backup_glob(LOG_FILE)),
-    }
-
-LOG_FILE = _resolve_data_file("compliance_training_log.csv")
+LOG_FILE = BASE_DIR / "compliance_training_log.csv"
 LOG_FIELDNAMES = [
     "timestamp",
     "training_attempt_id",
@@ -787,7 +865,7 @@ LOG_FIELDNAMES = [
     "attempt_no_for_mission",
 ]
 
-RESULTS_FILE = _resolve_data_file("training_results.csv")
+RESULTS_FILE = BASE_DIR / "training_results.csv"
 RESULT_FIELDNAMES = [
     "employee_no",
     "name",
@@ -803,238 +881,32 @@ RESULT_FIELDNAMES = [
 ]
 
 
-def _gsheets_settings() -> dict:
-    s = {}
-    try:
-        if "compliance_adventure" in st.secrets:
-            s = dict(st.secrets["compliance_adventure"])
-        elif "gsheets" in st.secrets:
-            s = dict(st.secrets["gsheets"])
-    except Exception:
-        s = {}
-
-    def pick(*keys, default=""):
-        for k in keys:
-            try:
-                v = s.get(k) if isinstance(s, dict) else None
-            except Exception:
-                v = None
-            if v:
-                return str(v).strip()
-            try:
-                v2 = st.secrets.get(k)
-                if v2:
-                    return str(v2).strip()
-            except Exception:
-                pass
-        return default
-
-    return {
-        "spreadsheet_name": pick("spreadsheet_name", "spreadsheet", "GSHEETS_SPREADSHEET_NAME", default="2026_Compliance_Adventure"),
-        "log_worksheet": pick("log_worksheet", "log_sheet", default="Compliance_Training_Log"),
-        "results_worksheet": pick("results_worksheet", "results_sheet", default="Training_Results"),
-    }
-
-@st.cache_resource
-def _gsheets_client():
-    if gspread is None or ServiceAccountCredentials is None:
-        return None
-    try:
-        creds_dict = st.secrets.get("gcp_service_account", None)
-        if not creds_dict:
-            return None
-        scope = [
-            "https://www.googleapis.com/auth/spreadsheets",
-            "https://www.googleapis.com/auth/drive",
-        ]
-        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-        return gspread.authorize(creds)
-    except Exception:
-        return None
-
-def _gsheets_open():
-    client = _gsheets_client()
-    if not client:
-        return None
-    cfg = _gsheets_settings()
-    try:
-        return client.open(cfg["spreadsheet_name"])
-    except Exception:
-        return None
-
-def _gsheets_enabled() -> bool:
-    return _gsheets_open() is not None
-
-def _gsheets_ensure_worksheet(spreadsheet, title: str, header: list[str]):
-    try:
-        ws = spreadsheet.worksheet(title)
-    except Exception:
-        ws = spreadsheet.add_worksheet(title=title, rows=5000, cols=max(20, len(header) + 2))
-    try:
-        first_row = ws.row_values(1)
-    except Exception:
-        first_row = []
-    if not first_row:
-        ws.append_row(header)
-        return ws
-    existing = [str(x).strip() for x in first_row]
-    missing = [h for h in header if h not in existing]
-    if missing:
-        last_col = len(existing + missing)
-        def _excel_col(n: int) -> str:
-            s2 = ""
-            while n:
-                n, rem = divmod(n - 1, 26)
-                s2 = chr(65 + rem) + s2
-            return s2
-        ws.update(f"A1:{_excel_col(last_col)}1", [existing + missing])
-    return ws
-
-def _gsheets_append_row_safe(ws, values: list):
-    last_err = None
-    for delay in (0.2, 0.6, 1.2):
-        try:
-            ws.append_row(values, value_input_option="USER_ENTERED")
-            return True, None
-        except Exception as e:
-            last_err = e
-            try:
-                time.sleep(delay)
-            except Exception:
-                pass
-    return False, str(last_err)
-
-def _gsheets_sync_log_row(row: dict) -> None:
-    sp = _gsheets_open()
-    if sp is None:
-        return
-    pushed = st.session_state.setdefault("_gs_pushed_log_ids", set())
-    log_id = "|".join([
-        str(row.get("training_attempt_id", "")),
-        str(row.get("attempt_round", "")),
-        str(row.get("employee_no", "")),
-        str(row.get("mission_key", "")),
-        str(row.get("question_index", "")),
-        str(row.get("attempt_no_for_mission", "")),
-        str(row.get("timestamp", "")),
-    ])
-    if log_id in pushed:
-        return
-    cfg = _gsheets_settings()
-    ws = _gsheets_ensure_worksheet(sp, cfg["log_worksheet"], ["log_id"] + LOG_FIELDNAMES)
-    ok, err = _gsheets_append_row_safe(ws, [log_id] + [row.get(k, "") for k in LOG_FIELDNAMES])
-    if ok:
-        pushed.add(log_id)
-    else:
-        st.session_state["gsheets_last_error"] = err
-
-def _gsheets_sync_result_row(row: dict) -> None:
-    sp = _gsheets_open()
-    if sp is None:
-        return
-    pushed = st.session_state.setdefault("_gs_pushed_result_ids", set())
-    result_id = "|".join([
-        str(row.get("employee_no", "")),
-        str(row.get("training_attempt_id", "")),
-        str(row.get("attempt_round", "")),
-        str(row.get("ended_at", "")),
-    ])
-    if result_id in pushed:
-        return
-    cfg = _gsheets_settings()
-    ws = _gsheets_ensure_worksheet(sp, cfg["results_worksheet"], ["result_id"] + RESULT_FIELDNAMES)
-    ok, err = _gsheets_append_row_safe(ws, [result_id] + [row.get(k, "") for k in RESULT_FIELDNAMES])
-    if ok:
-        pushed.add(result_id)
-    else:
-        st.session_state["gsheets_last_error"] = err
-
-@st.cache_data(ttl=120)
-def _gsheets_fetch_all(ws_title: str) -> list[list[str]]:
-    sp = _gsheets_open()
-    if sp is None:
-        return []
-    try:
-        ws = sp.worksheet(ws_title)
-        return ws.get_all_values()
-    except Exception:
-        return []
-
-def _bootstrap_local_csv_from_sheets_if_missing() -> None:
-    sp = _gsheets_open()
-    if sp is None:
-        return
-    cfg = _gsheets_settings()
-
-    if not RESULTS_FILE.exists() or _count_csv_rows(RESULTS_FILE) == 0:
-        rows = _gsheets_fetch_all(cfg["results_worksheet"])
-        if rows and len(rows) >= 2:
-            header = rows[0]
-            data = rows[1:]
-            idx = {h: i for i, h in enumerate(header)}
-            output = io.StringIO()
-            w = csv.DictWriter(output, fieldnames=RESULT_FIELDNAMES)
-            w.writeheader()
-            for r in data:
-                d = {k: (r[idx[k]] if k in idx and idx[k] < len(r) else "") for k in RESULT_FIELDNAMES}
-                w.writerow(d)
-            _atomic_write_bytes(RESULTS_FILE, output.getvalue().encode("utf-8-sig"))
-
-    if not LOG_FILE.exists() or _count_csv_rows(LOG_FILE) == 0:
-        rows = _gsheets_fetch_all(cfg["log_worksheet"])
-        if rows and len(rows) >= 2:
-            header = rows[0]
-            data = rows[1:]
-            idx = {h: i for i, h in enumerate(header)}
-            output = io.StringIO()
-            w = csv.DictWriter(output, fieldnames=LOG_FIELDNAMES)
-            w.writeheader()
-            for r in data:
-                d = {k: (r[idx[k]] if k in idx and idx[k] < len(r) else "") for k in LOG_FIELDNAMES}
-                w.writerow(d)
-            _atomic_write_bytes(LOG_FILE, output.getvalue().encode("utf-8-sig"))
-
-
-try:
-    _restore_from_latest_backup_if_missing_or_empty(LOG_FILE, minimum_rows=1)
-    _restore_from_latest_backup_if_missing_or_empty(RESULTS_FILE, minimum_rows=1)
-    _bootstrap_local_csv_from_sheets_if_missing()
-except Exception:
-    pass
-
 # =========================
 # Final Results (1인 1레코드)
 # =========================
 def _ensure_results_file():
     if not RESULTS_FILE.exists():
-        output = io.StringIO()
-        w = csv.DictWriter(output, fieldnames=RESULT_FIELDNAMES)
-        w.writeheader()
-        _atomic_write_bytes(RESULTS_FILE, output.getvalue().encode("utf-8-sig"))
+        with RESULTS_FILE.open("w", newline="", encoding="utf-8-sig") as f:
+            w = csv.DictWriter(f, fieldnames=RESULT_FIELDNAMES)
+            w.writeheader()
 
 def _load_results_df() -> pd.DataFrame:
-    if (not RESULTS_FILE.exists()) or _count_csv_rows(RESULTS_FILE) == 0:
-        _restore_from_latest_backup_if_missing_or_empty(RESULTS_FILE, minimum_rows=1)
-        try:
-            _bootstrap_local_csv_from_sheets_if_missing()
-        except Exception:
-            pass
     if not RESULTS_FILE.exists():
         return pd.DataFrame(columns=RESULT_FIELDNAMES)
     try:
-        df = pd.read_csv(RESULTS_FILE, dtype=str, encoding="utf-8-sig")
+        df = _safe_read_csv(RESULTS_FILE, dtype=str)
     except Exception:
-        try:
-            df = pd.read_csv(RESULTS_FILE, dtype=str, encoding="utf-8")
-        except Exception:
-            _restore_from_latest_backup_if_missing_or_empty(RESULTS_FILE, minimum_rows=1)
-            return pd.DataFrame(columns=RESULT_FIELDNAMES)
+        return pd.DataFrame(columns=RESULT_FIELDNAMES)
     if df is None:
         return pd.DataFrame(columns=RESULT_FIELDNAMES)
     df = df.copy()
     for c in RESULT_FIELDNAMES:
         if c not in df.columns:
             df[c] = ""
+    if 'employee_no' in df.columns:
+        df['employee_no'] = df['employee_no'].apply(_normalize_empno)
+    if 'organization' in df.columns:
+        df['organization'] = df['organization'].apply(_normalize_org_name)
     return df[RESULT_FIELDNAMES].copy()
 
 def _has_completed(employee_no: str) -> bool:
@@ -1049,19 +921,18 @@ def _has_completed(employee_no: str) -> bool:
 def _upsert_final_result(row: dict) -> None:
     _ensure_results_file()
     row = {k: ("" if row.get(k) is None else row.get(k)) for k in RESULT_FIELDNAMES}
+    row['employee_no'] = _normalize_empno(row.get('employee_no', ''))
+    row['organization'] = _normalize_org_name(row.get('organization', ''))
     df = _load_results_df()
-    emp = str(row.get("employee_no", "")).strip()
+    emp = row.get('employee_no', '')
     if emp:
-        df = df[df["employee_no"].astype(str).str.strip() != emp].copy()
+        df = df[df['employee_no'].astype(str).apply(_normalize_empno) != emp].copy()
     df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
-    if "ended_at" in df.columns:
-        df["_ended_sort"] = pd.to_datetime(df["ended_at"], errors="coerce")
-        df = df.sort_values("_ended_sort", ascending=False).drop(columns=["_ended_sort"])
-    _safe_results_write(df)
-    try:
-        _gsheets_sync_result_row(row)
-    except Exception:
-        pass
+    if 'ended_at' in df.columns:
+        df['_ended_sort'] = pd.to_datetime(df['ended_at'], errors='coerce')
+        df = df.sort_values('_ended_sort', ascending=False).drop(columns=['_ended_sort'])
+    _create_timestamped_backup(RESULTS_FILE, max_backups=MAX_RESULT_BACKUPS)
+    _safe_atomic_to_csv(df, RESULTS_FILE, index=False, encoding='utf-8-sig')
 
 def save_final_result_if_needed(force: bool = False) -> None:
     if st.session_state.get("final_result_saved", False) and not force:
@@ -1149,74 +1020,69 @@ def _load_org_targets() -> dict:
     return out
 
 def compute_org_scoreboard() -> pd.DataFrame:
-    """기관별 집계(1인 1레코드 최종결과 기반)
+    """기관별 집계(1인 1레코드 최종결과 기반 + 기관 백업 CSV 보강).
 
-    - 평균점수(%) : 참여자들의 득점률 평균
-    - 참여율점수 : 목표 대비 참여율(%)을 점수화(5.0~10.0)
-    - 누적점수(총점) : 참여율점수 + 평균점수(%)
-      (행사 목적상 '참여 독려 + 학습 성과'를 한 지표로 랭킹화)
+    - 라이브 결과 CSV가 축소되더라도, 업로드/백업된 기관 export CSV가 더 풍부하면
+      기관 전광판에는 더 큰 값을 우선 반영한다.
+    - 향후 신규 참여자가 늘어나면 라이브 값이 백업 값을 넘는 시점부터 자동으로 라이브가 우선된다.
     """
-    df = _load_results_df()
     cols = [
         "rank","organization","participants","target",
         "participation_rate","participation_rate_score",
         "avg_score_rate","cumulative_score","score_sum_rate",
         "last_activity",
     ]
-    if df.empty:
-        return pd.DataFrame(columns=cols)
 
-    df = df.copy()
-    df["organization"] = df["organization"].fillna("미분류").astype(str).str.strip()
-    df["employee_no"] = df["employee_no"].astype(str).str.strip()
-    df["score_rate"] = pd.to_numeric(df["score_rate"], errors="coerce").fillna(0.0)
+    df = _load_results_df()
+    live = pd.DataFrame(columns=cols)
+    if not df.empty:
+        df = df.copy()
+        df["organization"] = df["organization"].apply(_normalize_org_name)
+        df["employee_no"] = df["employee_no"].apply(_normalize_empno)
+        df["name"] = df["name"].fillna("").astype(str).str.strip()
+        df["score_rate"] = pd.to_numeric(df["score_rate"], errors="coerce").fillna(0.0)
 
-    g = df.groupby("organization", dropna=False).agg(
-        participants=("employee_no","nunique"),
-        avg_score_rate=("score_rate","mean"),
-        score_sum_rate=("score_rate","sum"),
-        last_activity=("ended_at","max"),
-    ).reset_index()
+        df["participant_key"] = df["employee_no"]
+        no_emp_mask = df["participant_key"].eq("")
+        df.loc[no_emp_mask, "participant_key"] = (
+            df.loc[no_emp_mask, "organization"].fillna("").astype(str).str.strip()
+            + "|" +
+            df.loc[no_emp_mask, "name"].fillna("").astype(str).str.strip().str.replace(" ", "", regex=False)
+        )
 
-    # 목표 인원(기관별) 매핑
-    targets = _load_org_targets()
-    g["target"] = g["organization"].map(targets).fillna(0).astype(int)
+        live = df.groupby("organization", dropna=False).agg(
+            participants=("participant_key","nunique"),
+            avg_score_rate=("score_rate","mean"),
+            score_sum_rate=("score_rate","sum"),
+            last_activity=("ended_at","max"),
+        ).reset_index()
 
-    # 참여율 및 참여율점수
-    g["participation_rate"] = np.where(
-        g["target"] > 0,
-        (g["participants"] / g["target"]) * 100.0,
-        np.nan
-    )
-    g["participation_rate_score"] = g["participation_rate"].apply(
-        lambda x: _participation_rate_score(x) if pd.notna(x) else np.nan
-    )
+        targets = _load_org_targets()
+        live["target"] = live["organization"].map(targets).fillna(0).astype(int)
+        live["participation_rate"] = np.where(
+            live["target"] > 0,
+            (live["participants"] / live["target"]) * 100.0,
+            np.nan
+        )
+        live["participation_rate_score"] = live["participation_rate"].apply(
+            lambda x: _participation_rate_score(x) if pd.notna(x) else np.nan
+        )
+        live["_prs"] = pd.to_numeric(live["participation_rate_score"], errors="coerce").fillna(0.0)
+        live["_avg"] = pd.to_numeric(live["avg_score_rate"], errors="coerce").fillna(0.0)
+        live["cumulative_score"] = (live["_prs"] + live["_avg"])
+        live = live.drop(columns=["_prs","_avg"], errors='ignore')
+        live["avg_score_rate"] = live["avg_score_rate"].round(1)
+        live["score_sum_rate"] = live["score_sum_rate"].round(1)
+        live["participation_rate"] = live["participation_rate"].round(1)
+        live["participation_rate_score"] = live["participation_rate_score"].round(1)
+        live["cumulative_score"] = live["cumulative_score"].round(1)
+        live["rank"] = np.arange(1, len(live) + 1)
+        live = live[cols]
 
-    # 누적점수(총점) = 참여율점수 + 평균점수(%)
-    # - target이 없는 기관(참여율점수 NaN)은 0점으로 처리하여 평균점수만 반영되도록 함
-    g["_prs"] = pd.to_numeric(g["participation_rate_score"], errors="coerce").fillna(0.0)
-    g["_avg"] = pd.to_numeric(g["avg_score_rate"], errors="coerce").fillna(0.0)
-    g["cumulative_score"] = (g["_prs"] + g["_avg"])
-
-    # 랭킹 기준: 누적점수(총점) ↓, 참여율점수 ↓, 평균점수 ↓, 참여자수 ↓
-    g["_cum"] = pd.to_numeric(g["cumulative_score"], errors="coerce").fillna(0.0)
-    g["_p"] = pd.to_numeric(g["participants"], errors="coerce").fillna(0)
-    g = g.sort_values(
-        ["_cum","_prs","_avg","_p"],
-        ascending=[False, False, False, False]
-    ).reset_index(drop=True)
-    g["rank"] = np.arange(1, len(g) + 1)
-
-    # 표시용 반올림(가독성: 소수 1자리)
-    g["avg_score_rate"] = g["avg_score_rate"].round(1)
-    g["score_sum_rate"] = g["score_sum_rate"].round(1)
-    g["participation_rate"] = g["participation_rate"].round(1)
-    g["participation_rate_score"] = g["participation_rate_score"].round(1)
-    g["cumulative_score"] = g["cumulative_score"].round(1)
-
-    g = g.drop(columns=["_cum","_prs","_avg","_p"])
-
-    return g[cols]
+    backup = _load_org_scoreboard_backup_df()
+    merged = _merge_org_scoreboards(live, backup)
+    _snapshot_org_scoreboard_if_needed(merged)
+    return merged[cols] if not merged.empty else pd.DataFrame(columns=cols)
 
 
 def render_org_electronic_board_sidebar():
@@ -1876,7 +1742,11 @@ def _ensure_log_schema_file():
         return
 
     rows = _read_log_rows_tolerant()
-    _safe_log_rewrite(rows)
+    with open(LOG_FILE, "w", newline="", encoding="utf-8-sig") as f:
+        writer = csv.DictWriter(f, fieldnames=LOG_FIELDNAMES)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(_normalize_log_row(row))
 
 
 def _coerce_log_df(df: pd.DataFrame) -> pd.DataFrame:
@@ -2304,10 +2174,6 @@ def append_attempt_log(mission_key: str, q_idx: int, q_type: str, payload: dict)
             if not file_exists:
                 writer.writeheader()
             writer.writerow(row)
-        try:
-            _gsheets_sync_log_row(row)
-        except Exception:
-            pass
     except Exception as e:
         st.session_state.log_write_error = str(e)
 
@@ -2961,38 +2827,22 @@ def render_admin_page():
             )
             st.caption("※ 참여율점수는 목표 대비 참여율(%)을 기준으로 산정됩니다. org_targets.csv가 없으면 참여율 관련 값은 비어 있을 수 있습니다.")
 
-    with tab_log:
-        status = _storage_status()
-        gs_on = _gsheets_enabled()
-        st.markdown("### 🛡 데이터 보호 현황")
-        st.info(
-            "현재 버전은 CSV 급감 저장 차단, 저장 전 자동 백업, 백업 복구, Google Sheets 동시 적재(설정 시) 방식으로 "
-            "남은 운영기간 동안 데이터 유실 위험을 낮추도록 보강되었습니다."
-        )
-        c1, c2, c3 = st.columns(3)
-        c1.metric("결과 CSV 행수", status["results_rows"])
-        c2.metric("결과 백업 수", status["results_backups"])
-        c3.metric("Google Sheets", "연결됨" if gs_on else "미연결")
-        with st.expander("예방 계획 및 현재 경로 확인", expanded=False):
-            st.write("- 결과 파일은 기존 파일을 우선 사용하고, 저장 전 자동 백업 후 원자적으로 교체합니다.")
-            st.write("- 기존 대비 행 수가 급감하면 저장을 차단해 대량 손실을 막습니다.")
-            st.write("- Google Sheets가 연결되면 로그/최종결과를 동시에 적재합니다.")
-            st.code(
-                f"RESULTS_FILE: {status['results_path']}\nLOG_FILE: {status['log_path']}",
-                language="text"
-            )
-        bak_rows = []
-        for p in _backup_glob(RESULTS_FILE)[:20]:
-            bak_rows.append({
-                "파일명": p.name,
-                "행수": _count_csv_rows(p),
-                "크기(KB)": round(p.stat().st_size / 1024, 1),
-                "수정시각": datetime.fromtimestamp(p.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S"),
-            })
-        if bak_rows:
-            st.markdown("#### 🗂 결과 백업 파일 목록")
-            st.dataframe(pd.DataFrame(bak_rows), use_container_width=True, hide_index=True)
+            backup_sb = _load_org_scoreboard_backup_df()
+            if not backup_sb.empty:
+                with st.expander("기관 전광판 백업/보강 정보", expanded=False):
+                    st.write(f"백업 기준 파일: {backup_sb['_source_file'].iloc[0]}")
+                    st.write(f"백업 파일 시각: {backup_sb['_source_mtime'].iloc[0]}")
+                    st.write(f"백업 기준 총 참여자 수: {int(pd.to_numeric(backup_sb['participants'], errors='coerce').fillna(0).sum())}명")
+                    backup_files = sorted(BASE_DIR.glob('org_scoreboard_backup_*.csv'), key=lambda p: p.stat().st_mtime, reverse=True)
+                    if backup_files:
+                        backup_meta = pd.DataFrame([{
+                            '파일명': p.name,
+                            '크기(KB)': round(p.stat().st_size / 1024, 1),
+                            '수정시각': datetime.fromtimestamp(p.stat().st_mtime).strftime('%Y-%m-%d %H:%M:%S'),
+                        } for p in backup_files[:10]])
+                        st.dataframe(backup_meta, use_container_width=True, hide_index=True)
 
+    with tab_log:
         df = _load_results_df()
         if df.empty:
             st.info("최종 결과 로그(training_results.csv)가 없습니다.")
@@ -3688,7 +3538,7 @@ try:
             """
             <div class='card'>
               <div class='card-title gold-text'>교육 방식</div>
-              <div class='gold-text'>지도에서 테마 선택 → 핵심 브리핑 학습 → 퀴즈 풀이(4지선다 + 단답형) → 정복 완료!</div>
+              <div class='gold-text'>Select a theme from the map → Study the core briefing → Quiz (4 choices + short answer) → Conquer completed!</div>
             </div>
             """,
             unsafe_allow_html=True,
