@@ -2704,6 +2704,66 @@ def render_admin_page():
             st.caption("※ 참여율점수는 목표 대비 참여율(%)을 기준으로 산정됩니다. org_targets.csv가 없으면 참여율 관련 값은 비어 있을 수 있습니다.")
 
     with tab_log:
+        st.subheader("복구/병합용 백업 파일 업로드")
+        st.caption("※ 최종 결과 백업 CSV만 업로드하세요. 기관 전광판 내보내기 파일은 병합 대상이 아닙니다.")
+
+        uploaded_file = st.file_uploader(
+            "백업 CSV 파일 선택",
+            type=["csv"],
+            key="admin_backup_csv_uploader",
+            help="사번/이름/소속기관/참여시각/종료시각/최종점수 등이 포함된 최종 결과 백업 CSV를 업로드합니다.",
+        )
+
+        def _is_valid_final_result_backup(df: pd.DataFrame) -> bool:
+            if df is None or df.empty:
+                return False
+            cols = {str(c).strip() for c in df.columns}
+            required = {"사번", "소속기관", "참여시각", "종료시각", "참여시간(초)", "최종점수", "득점률(%)", "등급", "시도ID", "회차"}
+            return required.issubset(cols) and ("이름" in cols or "이름.1" in cols)
+
+        if uploaded_file is not None:
+            try:
+                new_data = pd.read_csv(uploaded_file, encoding="utf-8-sig")
+            except Exception:
+                uploaded_file.seek(0)
+                try:
+                    new_data = pd.read_csv(uploaded_file, encoding="utf-8")
+                except Exception as e:
+                    new_data = None
+                    st.error(f"업로드 파일을 읽는 중 오류가 발생했습니다: {e}")
+
+            if new_data is not None:
+                if not _is_valid_final_result_backup(new_data):
+                    st.error("업로드한 CSV 형식이 올바르지 않습니다. '최종 결과 로그' 백업 파일인지 다시 확인해 주세요.")
+                else:
+                    st.success(f"업로드 파일을 확인했습니다. 총 {len(new_data):,}건의 행이 있습니다.")
+                    with st.expander("업로드 파일 미리보기", expanded=False):
+                        safe_dataframe(new_data.head(20), use_container_width=True, hide_index=True)
+
+                    if st.button("서버 데이터와 병합", key="merge_admin_backup_csv", use_container_width=True):
+                        try:
+                            if LOG_FILE.exists():
+                                try:
+                                    old_data = pd.read_csv(LOG_FILE, encoding="utf-8-sig")
+                                except Exception:
+                                    old_data = pd.read_csv(LOG_FILE, encoding="utf-8")
+
+                                if _is_valid_final_result_backup(old_data):
+                                    combined = pd.concat([old_data, new_data], ignore_index=True)
+                                else:
+                                    combined = new_data.copy()
+                            else:
+                                combined = new_data.copy()
+
+                            combined = combined.copy()
+                            combined.columns = [str(c).strip() for c in combined.columns]
+                            combined = combined.drop_duplicates().reset_index(drop=True)
+                            combined.to_csv(LOG_FILE, index=False, encoding="utf-8-sig")
+                            st.success("데이터 병합이 완료되었습니다. 관리자 대시보드를 새로고침합니다.")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"파일 처리 중 오류가 발생했습니다: {e}")
+
         df = _merge_results_for_admin()
         if df.empty:
             st.info("최종 결과 로그에 표시할 데이터가 없습니다. 같은 폴더의 training_results.csv 또는 compliance_training_log.csv를 확인해 주세요.")
