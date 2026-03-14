@@ -648,6 +648,7 @@ def safe_bar_chart(data, **kwargs):
 BASE_DIR = Path(__file__).parent if "__file__" in globals() else Path.cwd()
 ASSET_DIR = BASE_DIR
 LOG_FILE = BASE_DIR / "compliance_training_log.csv"
+ADMIN_BACKUP_RESULTS_FILE = BASE_DIR / "admin_uploaded_results_backup.csv"
 LOG_FIELDNAMES = [
     "timestamp",
     "training_attempt_id",
@@ -713,52 +714,67 @@ def _load_backup_results_df() -> pd.DataFrame:
     """관리자 대시보드용 백업 최종결과 로드.
 
     - 현재 운영 상태는 그대로 두고
-    - 같은 폴더의 compliance_training_log.csv(최종결과형 백업)를
-      관리자 > 최종 결과 로그 / 기관 전광판에만 반영한다.
+    - 기존 compliance_training_log.csv(최종결과형 백업)가 있으면 함께 반영
+    - 관리자 업로드 전용 admin_uploaded_results_backup.csv도 함께 반영
     """
-    backup_file = BASE_DIR / "compliance_training_log.csv"
-    if not backup_file.exists():
-        return pd.DataFrame(columns=RESULT_FIELDNAMES)
-    try:
-        raw = pd.read_csv(backup_file, dtype=str, encoding="utf-8-sig")
-    except Exception:
+    candidate_files = [
+        BASE_DIR / "compliance_training_log.csv",
+        ADMIN_BACKUP_RESULTS_FILE,
+    ]
+
+    frames = []
+    for backup_file in candidate_files:
+        if not backup_file.exists():
+            continue
         try:
-            raw = pd.read_csv(backup_file, dtype=str, encoding="utf-8")
+            raw = pd.read_csv(backup_file, dtype=str, encoding="utf-8-sig")
         except Exception:
-            return pd.DataFrame(columns=RESULT_FIELDNAMES)
-    if raw is None or raw.empty:
+            try:
+                raw = pd.read_csv(backup_file, dtype=str, encoding="utf-8")
+            except Exception:
+                continue
+
+        if raw is None or raw.empty:
+            continue
+
+        cols = {str(c).strip(): c for c in raw.columns}
+        required = ["사번","소속기관","참여시각","종료시각","참여시간(초)","최종점수","득점률(%)","등급","시도ID","회차"]
+        if not all(k in cols for k in required):
+            continue
+
+        name_col = cols.get("이름") or cols.get("이름.1")
+        if not name_col:
+            continue
+
+        out = pd.DataFrame({
+            "employee_no": raw[cols["사번"]].astype(str),
+            "name": raw[name_col].astype(str),
+            "organization": raw[cols["소속기관"]].astype(str),
+            "participated_at": raw[cols["참여시각"]].astype(str),
+            "ended_at": raw[cols["종료시각"]].astype(str),
+            "duration_sec": raw[cols["참여시간(초)"]].astype(str),
+            "final_score": raw[cols["최종점수"]].astype(str),
+            "score_rate": raw[cols["득점률(%)"]].astype(str),
+            "grade": raw[cols["등급"]].astype(str),
+            "training_attempt_id": raw[cols["시도ID"]].astype(str),
+            "attempt_round": raw[cols["회차"]].astype(str),
+        })
+        for c in RESULT_FIELDNAMES:
+            if c not in out.columns:
+                out[c] = ""
+        out = out[RESULT_FIELDNAMES].copy()
+        for c in RESULT_FIELDNAMES:
+            out[c] = out[c].fillna("").astype(str).replace({"nan":"", "NaT":""}).str.strip()
+        out = out[(out["employee_no"] != "") | (out["name"] != "")].copy()
+        if not out.empty:
+            frames.append(out)
+
+    if not frames:
         return pd.DataFrame(columns=RESULT_FIELDNAMES)
 
-    cols = {str(c).strip(): c for c in raw.columns}
-    required = ["사번","소속기관","참여시각","종료시각","참여시간(초)","최종점수","득점률(%)","등급","시도ID","회차"]
-    if not all(k in cols for k in required):
-        return pd.DataFrame(columns=RESULT_FIELDNAMES)
-
-    name_col = cols.get("이름") or cols.get("이름.1")
-    if not name_col:
-        return pd.DataFrame(columns=RESULT_FIELDNAMES)
-
-    out = pd.DataFrame({
-        "employee_no": raw[cols["사번"]].astype(str),
-        "name": raw[name_col].astype(str),
-        "organization": raw[cols["소속기관"]].astype(str),
-        "participated_at": raw[cols["참여시각"]].astype(str),
-        "ended_at": raw[cols["종료시각"]].astype(str),
-        "duration_sec": raw[cols["참여시간(초)"]].astype(str),
-        "final_score": raw[cols["최종점수"]].astype(str),
-        "score_rate": raw[cols["득점률(%)"]].astype(str),
-        "grade": raw[cols["등급"]].astype(str),
-        "training_attempt_id": raw[cols["시도ID"]].astype(str),
-        "attempt_round": raw[cols["회차"]].astype(str),
-    })
-    for c in RESULT_FIELDNAMES:
-        if c not in out.columns:
-            out[c] = ""
-    out = out[RESULT_FIELDNAMES].copy()
-    for c in RESULT_FIELDNAMES:
-        out[c] = out[c].fillna("").astype(str).replace({"nan":"", "NaT":""}).str.strip()
-    out = out[(out["employee_no"] != "") | (out["name"] != "")].copy()
-    return out
+    merged = pd.concat(frames, ignore_index=True)
+    merged = merged.drop_duplicates().reset_index(drop=True)
+    return merged[RESULT_FIELDNAMES].copy()
 
 def _merge_results_for_admin() -> pd.DataFrame:
     """관리자 대시보드용 최종 결과. 현재 데이터 + 백업 데이터 병합."""
@@ -2706,13 +2722,7 @@ def render_admin_page():
     with tab_log:
         st.subheader("복구/병합용 백업 파일 업로드")
         st.caption("※ 최종 결과 백업 CSV만 업로드하세요. 기관 전광판 내보내기 파일은 병합 대상이 아닙니다.")
-
-        uploaded_file = st.file_uploader(
-            "백업 CSV 파일 선택",
-            type=["csv"],
-            key="admin_backup_csv_uploader",
-            help="사번/이름/소속기관/참여시각/종료시각/최종점수 등이 포함된 최종 결과 백업 CSV를 업로드합니다.",
-        )
+        st.caption(f"업로드 병합 대상 파일: {ADMIN_BACKUP_RESULTS_FILE.name}")
 
         def _is_valid_final_result_backup(df: pd.DataFrame) -> bool:
             if df is None or df.empty:
@@ -2721,48 +2731,111 @@ def render_admin_page():
             required = {"사번", "소속기관", "참여시각", "종료시각", "참여시간(초)", "최종점수", "득점률(%)", "등급", "시도ID", "회차"}
             return required.issubset(cols) and ("이름" in cols or "이름.1" in cols)
 
+        def _read_uploaded_backup_csv(file_obj):
+            if file_obj is None:
+                return None
+            try:
+                file_obj.seek(0)
+            except Exception:
+                pass
+            try:
+                return pd.read_csv(file_obj, dtype=str, encoding="utf-8-sig")
+            except Exception:
+                try:
+                    file_obj.seek(0)
+                except Exception:
+                    pass
+                return pd.read_csv(file_obj, dtype=str, encoding="utf-8")
+
+        uploaded_file = st.file_uploader(
+            "백업 CSV 파일 선택",
+            type=["csv"],
+            key="admin_backup_csv_uploader",
+            help="사번/이름/소속기관/참여시각/종료시각/최종점수 등이 포함된 최종 결과 백업 CSV를 업로드합니다.",
+        )
+
+        uploaded_df = None
         if uploaded_file is not None:
             try:
-                new_data = pd.read_csv(uploaded_file, encoding="utf-8-sig")
-            except Exception:
-                uploaded_file.seek(0)
-                try:
-                    new_data = pd.read_csv(uploaded_file, encoding="utf-8")
-                except Exception as e:
-                    new_data = None
-                    st.error(f"업로드 파일을 읽는 중 오류가 발생했습니다: {e}")
+                uploaded_df = _read_uploaded_backup_csv(uploaded_file)
+            except Exception as e:
+                uploaded_df = None
+                st.error(f"업로드 파일을 읽는 중 오류가 발생했습니다: {e}")
 
-            if new_data is not None:
-                if not _is_valid_final_result_backup(new_data):
-                    st.error("업로드한 CSV 형식이 올바르지 않습니다. '최종 결과 로그' 백업 파일인지 다시 확인해 주세요.")
-                else:
-                    st.success(f"업로드 파일을 확인했습니다. 총 {len(new_data):,}건의 행이 있습니다.")
-                    with st.expander("업로드 파일 미리보기", expanded=False):
-                        safe_dataframe(new_data.head(20), use_container_width=True, hide_index=True)
+        if uploaded_df is not None:
+            uploaded_df = uploaded_df.copy()
+            uploaded_df.columns = [str(c).strip() for c in uploaded_df.columns]
 
-                    if st.button("서버 데이터와 병합", key="merge_admin_backup_csv", use_container_width=True):
+            if not _is_valid_final_result_backup(uploaded_df):
+                st.error("업로드한 CSV 형식이 올바르지 않습니다. '최종 결과 로그' 백업 파일인지 다시 확인해 주세요.")
+                st.info("참고: 기관 전광판 내보내기 CSV는 [순위, 기관, 참여자(명) ...] 형식이라 병합할 수 없습니다.")
+            else:
+                st.success(f"업로드 파일을 확인했습니다. 총 {len(uploaded_df):,}건의 행이 있습니다.")
+                with st.expander("업로드 파일 미리보기", expanded=False):
+                    safe_dataframe(uploaded_df.head(20), use_container_width=True, hide_index=True)
+
+                existing_backup_df = pd.DataFrame()
+                if ADMIN_BACKUP_RESULTS_FILE.exists():
+                    try:
+                        existing_backup_df = pd.read_csv(ADMIN_BACKUP_RESULTS_FILE, dtype=str, encoding="utf-8-sig")
+                    except Exception:
                         try:
-                            if LOG_FILE.exists():
-                                try:
-                                    old_data = pd.read_csv(LOG_FILE, encoding="utf-8-sig")
-                                except Exception:
-                                    old_data = pd.read_csv(LOG_FILE, encoding="utf-8")
+                            existing_backup_df = pd.read_csv(ADMIN_BACKUP_RESULTS_FILE, dtype=str, encoding="utf-8")
+                        except Exception:
+                            existing_backup_df = pd.DataFrame()
 
-                                if _is_valid_final_result_backup(old_data):
-                                    combined = pd.concat([old_data, new_data], ignore_index=True)
-                                else:
-                                    combined = new_data.copy()
-                            else:
-                                combined = new_data.copy()
+                if existing_backup_df is None or existing_backup_df.empty:
+                    existing_backup_df = pd.DataFrame(columns=uploaded_df.columns)
 
-                            combined = combined.copy()
-                            combined.columns = [str(c).strip() for c in combined.columns]
-                            combined = combined.drop_duplicates().reset_index(drop=True)
-                            combined.to_csv(LOG_FILE, index=False, encoding="utf-8-sig")
-                            st.success("데이터 병합이 완료되었습니다. 관리자 대시보드를 새로고침합니다.")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"파일 처리 중 오류가 발생했습니다: {e}")
+                if not existing_backup_df.empty:
+                    existing_backup_df = existing_backup_df.copy()
+                    existing_backup_df.columns = [str(c).strip() for c in existing_backup_df.columns]
+
+                before_rows = len(existing_backup_df)
+                preview_combined = pd.concat([existing_backup_df, uploaded_df], ignore_index=True).drop_duplicates().reset_index(drop=True)
+                after_rows = len(preview_combined)
+                added_rows = max(after_rows - before_rows, 0)
+
+                col_a, col_b, col_c = st.columns(3)
+                col_a.metric("기존 업로드 백업", f"{before_rows:,}건")
+                col_b.metric("업로드 파일", f"{len(uploaded_df):,}건")
+                col_c.metric("병합 후 예상 증가", f"{added_rows:,}건")
+
+                with st.form("admin_backup_merge_form", clear_on_submit=False):
+                    st.markdown("병합 버튼을 누르면 관리자 업로드 전용 백업 파일에 저장되고, 최종 결과 로그/기관 전광판에 즉시 반영됩니다.")
+                    merge_clicked = st.form_submit_button("서버 데이터와 병합", use_container_width=True, type="primary")
+
+                if merge_clicked:
+                    try:
+                        existing_backup_df = existing_backup_df.copy()
+                        uploaded_df = uploaded_df.copy()
+
+                        if existing_backup_df.empty:
+                            combined = uploaded_df
+                        else:
+                            combined = pd.concat([existing_backup_df, uploaded_df], ignore_index=True)
+
+                        combined.columns = [str(c).strip() for c in combined.columns]
+                        combined = combined.drop_duplicates().reset_index(drop=True)
+                        combined.to_csv(ADMIN_BACKUP_RESULTS_FILE, index=False, encoding="utf-8-sig")
+
+                        st.session_state["admin_backup_merge_result"] = {
+                            "saved_file": ADMIN_BACKUP_RESULTS_FILE.name,
+                            "before_rows": int(before_rows),
+                            "uploaded_rows": int(len(uploaded_df)),
+                            "after_rows": int(len(combined)),
+                            "added_rows": int(max(len(combined) - before_rows, 0)),
+                        }
+                        st.success("데이터 병합이 완료되었습니다. 아래 로그 표를 다시 확인해 주세요.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"파일 처리 중 오류가 발생했습니다: {e}")
+
+        merge_result = st.session_state.get("admin_backup_merge_result")
+        if merge_result:
+            st.info(
+                f"최근 병합 결과 · 저장파일: {merge_result['saved_file']} / 기존 {merge_result['before_rows']:,}건 + 업로드 {merge_result['uploaded_rows']:,}건 → 저장 {merge_result['after_rows']:,}건 (실제 증가 {merge_result['added_rows']:,}건)"
+            )
 
         df = _merge_results_for_admin()
         if df.empty:
