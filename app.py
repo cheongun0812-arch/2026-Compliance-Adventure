@@ -3441,7 +3441,7 @@ try:
             st.info("맵 이미지를 추가하면 인트로 연출이 더 좋아집니다.")
 
         st.markdown("<div style='height:10px;'></div>", unsafe_allow_html=True)
-        st.title("🛡️ 2026 Compliance Adventure")
+        st.title("🛡️ 2026 컴플라이언스 어드벤처")
         st.caption("Guardian Training · 컴플라이언스 테마 정복형 학습")
 
         st.markdown(
