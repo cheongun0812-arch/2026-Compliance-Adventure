@@ -45,7 +45,7 @@ import random
 # =========================================================
 # 1) 페이지 설정 / 스타일
 # =========================================================
-st.set_page_config(page_title="2026 Compliance Adventure", layout="wide")
+st.set_page_config(page_title="2026 컴플라이언스 어드벤처", layout="wide")
 
 st.markdown("""
 <style>
@@ -939,163 +939,75 @@ def _load_org_targets() -> dict:
         out[org] = tgt
     return out
 
-
-def _to_float_safe(value, default=np.nan):
-    try:
-        s = str(value).replace(",", "").replace("%", "").strip()
-        return float(s)
-    except Exception:
-        return default
-
-
-def _to_int_safe(value, default=0):
-    try:
-        s = str(value).replace(",", "").replace("명", "").strip()
-        return int(float(s))
-    except Exception:
-        return default
-
-
-def _load_org_scoreboard_export() -> pd.DataFrame:
-    cols = [
-        "rank","organization","participants","target",
-        "participation_rate","participation_rate_score",
-        "avg_score_rate","cumulative_score","score_sum_rate",
-        "last_activity",
-    ]
-    candidates = []
-    seen = set()
-    for pattern in ["*_export.csv", "*기관*전광판*.csv", "*기관별*.csv"]:
-        for fp in sorted(BASE_DIR.glob(pattern)):
-            if fp.name in seen:
-                continue
-            seen.add(fp.name)
-            candidates.append(fp)
-
-    best = pd.DataFrame(columns=cols)
-    best_count = -1
-    for fp in candidates:
-        try:
-            raw = _safe_read_csv(fp, dtype=str)
-        except Exception:
-            continue
-        if raw is None or raw.empty:
-            continue
-        rcols = {str(c).strip() for c in raw.columns}
-        needed = {"기관","참여자(명)","목표(명)","참여율(%)","참여율점수","평균점수(%)","누적점수(=참여율점수+평균점수)","점수합계(%)","최근 종료"}
-        if not needed.issubset(rcols):
-            continue
-        df = pd.DataFrame({
-            "rank": raw.get("순위", ""),
-            "organization": raw.get("기관", "").fillna("").astype(str).str.strip(),
-            "participants": raw.get("참여자(명)", "").apply(_to_int_safe),
-            "target": raw.get("목표(명)", "").apply(_to_int_safe),
-            "participation_rate": raw.get("참여율(%)", "").apply(_to_float_safe),
-            "participation_rate_score": raw.get("참여율점수", "").apply(_to_float_safe),
-            "avg_score_rate": raw.get("평균점수(%)", "").apply(_to_float_safe),
-            "cumulative_score": raw.get("누적점수(=참여율점수+평균점수)", "").apply(_to_float_safe),
-            "score_sum_rate": raw.get("점수합계(%)", "").apply(_to_float_safe),
-            "last_activity": raw.get("최근 종료", ""),
-        })
-        df = df[df["organization"] != ""].copy()
-        if df.empty:
-            continue
-        if len(df) > best_count or int(df["participants"].sum()) > int(best["participants"].sum()) if not best.empty else True:
-            best = df[cols].copy()
-            best_count = len(df)
-    return best
-
 def compute_org_scoreboard() -> pd.DataFrame:
-    """기관별 집계(1인 1레코드 최종결과 기반 + export CSV 보강)."""
+    """기관별 집계(1인 1레코드 최종결과 기반)
+
+    - 평균점수(%) : 참여자들의 득점률 평균
+    - 참여율점수 : 목표 대비 참여율(%)을 점수화(5.0~10.0)
+    - 누적점수(총점) : 참여율점수 + 평균점수(%)
+      (행사 목적상 '참여 독려 + 학습 성과'를 한 지표로 랭킹화)
+    """
+    df = _load_results_df()
     cols = [
         "rank","organization","participants","target",
         "participation_rate","participation_rate_score",
         "avg_score_rate","cumulative_score","score_sum_rate",
         "last_activity",
     ]
-
-    df = _load_results_df()
-    live = pd.DataFrame(columns=cols)
-    if df is not None and not df.empty:
-        df = df.copy()
-        df["organization"] = df["organization"].fillna("미분류").astype(str).str.strip()
-        df["employee_no"] = df["employee_no"].astype(str).str.strip()
-        # 사번 없으면 기관+이름 기준으로 고유 참가자 식별
-        df["_participant_key"] = df.apply(_participant_result_key, axis=1)
-        df["score_rate"] = pd.to_numeric(df["score_rate"], errors="coerce").fillna(0.0)
-        live = df.groupby("organization", dropna=False).agg(
-            participants=("_participant_key", "nunique"),
-            avg_score_rate=("score_rate", "mean"),
-            score_sum_rate=("score_rate", "sum"),
-            last_activity=("ended_at", "max"),
-        ).reset_index()
-
-        targets = _load_org_targets()
-        live["target"] = live["organization"].map(targets).fillna(0).astype(int)
-        live["participation_rate"] = np.where(
-            live["target"] > 0,
-            (live["participants"] / live["target"]) * 100.0,
-            np.nan
-        )
-        live["participation_rate_score"] = live["participation_rate"].apply(
-            lambda x: _participation_rate_score(x) if pd.notna(x) else np.nan
-        )
-        live["_prs"] = pd.to_numeric(live["participation_rate_score"], errors="coerce").fillna(0.0)
-        live["_avg"] = pd.to_numeric(live["avg_score_rate"], errors="coerce").fillna(0.0)
-        live["cumulative_score"] = (live["_prs"] + live["_avg"])
-        live = live.drop(columns=["_prs", "_avg"], errors="ignore")
-
-    export_df = _load_org_scoreboard_export()
-    if live.empty and export_df.empty:
+    if df.empty:
         return pd.DataFrame(columns=cols)
-    if export_df.empty:
-        combined = live.copy()
-    elif live.empty:
-        combined = export_df.copy()
-    else:
-        merged = live.merge(export_df, on="organization", how="outer", suffixes=("_live", "_exp"))
-        rows = []
-        for _, r in merged.iterrows():
-            live_p = _to_int_safe(r.get("participants_live", 0), 0)
-            exp_p = _to_int_safe(r.get("participants_exp", 0), 0)
-            use_prefix = "live" if live_p >= exp_p else "exp"
-            row = {"organization": r.get("organization", "미분류")}
-            for c in ["participants","target","participation_rate","participation_rate_score","avg_score_rate","cumulative_score","score_sum_rate","last_activity"]:
-                val = r.get(f"{c}_{use_prefix}")
-                if pd.isna(val) or val == "":
-                    other = "exp" if use_prefix == "live" else "live"
-                    val = r.get(f"{c}_{other}")
-                row[c] = val
-            rows.append(row)
-        combined = pd.DataFrame(rows)
 
-    for c in ["participants","target"]:
-        combined[c] = combined[c].apply(lambda v: _to_int_safe(v, 0))
-    for c in ["participation_rate","participation_rate_score","avg_score_rate","cumulative_score","score_sum_rate"]:
-        combined[c] = combined[c].apply(lambda v: _to_float_safe(v, np.nan))
-    # recompute live-like derived metrics when target exists and values missing
-    combined["participation_rate"] = np.where(
-        (combined["target"] > 0) & (combined["participation_rate"].isna()),
-        (combined["participants"] / combined["target"]) * 100.0,
-        combined["participation_rate"]
+    df = df.copy()
+    df["organization"] = df["organization"].fillna("미분류").astype(str).str.strip()
+    df["employee_no"] = df["employee_no"].astype(str).str.strip()
+    df["score_rate"] = pd.to_numeric(df["score_rate"], errors="coerce").fillna(0.0)
+
+    g = df.groupby("organization", dropna=False).agg(
+        participants=("employee_no","nunique"),
+        avg_score_rate=("score_rate","mean"),
+        score_sum_rate=("score_rate","sum"),
+        last_activity=("ended_at","max"),
+    ).reset_index()
+
+    # 목표 인원(기관별) 매핑
+    targets = _load_org_targets()
+    g["target"] = g["organization"].map(targets).fillna(0).astype(int)
+
+    # 참여율 및 참여율점수
+    g["participation_rate"] = np.where(
+        g["target"] > 0,
+        (g["participants"] / g["target"]) * 100.0,
+        np.nan
     )
-    combined["participation_rate_score"] = combined.apply(
-        lambda r: _participation_rate_score(r["participation_rate"]) if pd.notna(r["participation_rate"]) and pd.isna(r["participation_rate_score"]) else r["participation_rate_score"], axis=1
+    g["participation_rate_score"] = g["participation_rate"].apply(
+        lambda x: _participation_rate_score(x) if pd.notna(x) else np.nan
     )
-    combined["cumulative_score"] = combined.apply(
-        lambda r: (_to_float_safe(r["participation_rate_score"], 0.0) + _to_float_safe(r["avg_score_rate"], 0.0)) if pd.isna(r["cumulative_score"]) else r["cumulative_score"], axis=1
-    )
-    combined["organization"] = combined["organization"].fillna("미분류").astype(str).str.strip()
-    combined["_cum"] = combined["cumulative_score"].fillna(0.0)
-    combined["_prs"] = combined["participation_rate_score"].fillna(0.0)
-    combined["_avg"] = combined["avg_score_rate"].fillna(0.0)
-    combined["_p"] = combined["participants"].fillna(0)
-    combined = combined.sort_values(["_cum", "_prs", "_avg", "_p"], ascending=[False, False, False, False]).reset_index(drop=True)
-    combined["rank"] = np.arange(1, len(combined) + 1)
-    for c in ["avg_score_rate","score_sum_rate","participation_rate","participation_rate_score","cumulative_score"]:
-        combined[c] = combined[c].round(1)
-    combined = combined.drop(columns=["_cum", "_prs", "_avg", "_p"], errors="ignore")
-    return combined[cols]
+
+    # 누적점수(총점) = 참여율점수 + 평균점수(%)
+    # - target이 없는 기관(참여율점수 NaN)은 0점으로 처리하여 평균점수만 반영되도록 함
+    g["_prs"] = pd.to_numeric(g["participation_rate_score"], errors="coerce").fillna(0.0)
+    g["_avg"] = pd.to_numeric(g["avg_score_rate"], errors="coerce").fillna(0.0)
+    g["cumulative_score"] = (g["_prs"] + g["_avg"])
+
+    # 랭킹 기준: 누적점수(총점) ↓, 참여율점수 ↓, 평균점수 ↓, 참여자수 ↓
+    g["_cum"] = pd.to_numeric(g["cumulative_score"], errors="coerce").fillna(0.0)
+    g["_p"] = pd.to_numeric(g["participants"], errors="coerce").fillna(0)
+    g = g.sort_values(
+        ["_cum","_prs","_avg","_p"],
+        ascending=[False, False, False, False]
+    ).reset_index(drop=True)
+    g["rank"] = np.arange(1, len(g) + 1)
+
+    # 표시용 반올림(가독성: 소수 1자리)
+    g["avg_score_rate"] = g["avg_score_rate"].round(1)
+    g["score_sum_rate"] = g["score_sum_rate"].round(1)
+    g["participation_rate"] = g["participation_rate"].round(1)
+    g["participation_rate_score"] = g["participation_rate_score"].round(1)
+    g["cumulative_score"] = g["cumulative_score"].round(1)
+
+    g = g.drop(columns=["_cum","_prs","_avg","_p"])
+
+    return g[cols]
 
 
 def render_org_electronic_board_sidebar():
@@ -2120,7 +2032,7 @@ def _render_employee_lookup_popup_body(name_query: str = ""):
             emp_no_chk = str(row.get("employee_no", "")).strip()
             emp_name_chk = str(row.get("name", "")).strip()
             if _has_completed(emp_no_chk):
-                st.info(f"ℹ️ {emp_name_chk}님은 이미 2026 Compliance Adventure를 완료했습니다.\n\n(Already completed the 2026 Compliance Adventure.)")
+                st.info(f"ℹ️ {emp_name_chk}님은 이미 2026 컴플라이언스 어드벤처를 완료했습니다.\n\n(이미 2026 컴플라이언스 어드벤처를 완료했습니다.)")
                 st.stop()
 
             st.session_state.employee_selected_record = {
@@ -2843,7 +2755,7 @@ def render_admin_page():
     with tab_log:
         df = _load_results_df()
         if df.empty:
-            st.info("최종 결과 로그에 표시할 데이터가 없습니다. 같은 폴더의 training_results.csv / compliance_training_log.csv / 백업 CSV를 확인해 주세요.")
+            st.info("최종 결과 로그(training_results.csv)가 없습니다.")
         else:
             st.subheader("참가자 최종 결과 (1인 1레코드)")
             show = df.rename(columns={
@@ -2853,7 +2765,6 @@ def render_admin_page():
                 "training_attempt_id":"시도ID","attempt_round":"회차"
             })
             st.dataframe(show, use_container_width=True, hide_index=True)
-            st.caption(f"총 참가자: {len(show):,}명")
             st.download_button(
                 "📥 최종 결과 로그 다운로드 (CSV)",
                 data=show.to_csv(index=False).encode("utf-8-sig"),
@@ -3530,14 +3441,14 @@ try:
             st.info("맵 이미지를 추가하면 인트로 연출이 더 좋아집니다.")
 
         st.markdown("<div style='height:10px;'></div>", unsafe_allow_html=True)
-        st.title("🛡️ 2026 Compliance Adventure")
-        st.caption("Guardian Training · 컴플라이언스 테마 정복형 학습")
+        st.title("🛡️ 2026 컴플라이언스 어드벤처")
+        st.caption("가디언 교육 · 컴플라이언스 테마 정복형 학습")
 
         st.markdown(
             """
             <div class='card'>
               <div class='card-title gold-text'>교육 방식</div>
-              <div class='gold-text'>Select a theme from the map → Study the core briefing → Quiz (4 choices + short answer) → Conquer completed!</div>
+              <div class='gold-text'>지도에서 테마 선택 → 핵심 브리핑 학습 → 퀴즈 풀이(4지선다 + 단답형) → 정복 완료!</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -3757,7 +3668,7 @@ try:
         wrong_like = sum(1 for r in st.session_state.attempt_history if str(r.get("is_correct", "")) in ["N", "PARTIAL"])
 
         st.balloons()
-        st.title("🏆 Guardian Training Complete")
+        st.title("🏆 가디언 교육 완료")
         st.success(f"{user_name} 가디언님, 모든 테마를 정복했습니다!")
 
         _ending_img = get_ending_image()
