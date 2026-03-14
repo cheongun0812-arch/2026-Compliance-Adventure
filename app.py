@@ -45,7 +45,7 @@ import random
 # =========================================================
 # 1) 페이지 설정 / 스타일
 # =========================================================
-st.set_page_config(page_title="2026 Compliance Adventure", layout="wide")
+st.set_page_config(page_title="2026 컴플라이언스 어드벤처", layout="wide")
 
 st.markdown("""
 <style>
@@ -775,6 +775,42 @@ def _load_backup_results_df() -> pd.DataFrame:
     merged = pd.concat(frames, ignore_index=True)
     merged = merged.drop_duplicates().reset_index(drop=True)
     return merged[RESULT_FIELDNAMES].copy()
+
+
+def _dedupe_final_result_backup_rows(df: pd.DataFrame) -> pd.DataFrame:
+    """최종 결과 백업 CSV를 1인 1건(최신 종료시각 우선) 기준으로 정리."""
+    if df is None:
+        return pd.DataFrame()
+    if df.empty:
+        return df.copy()
+
+    out = df.copy()
+    out.columns = [str(c).strip() for c in out.columns]
+
+    required = ["사번", "소속기관", "참여시각", "종료시각", "참여시간(초)", "최종점수", "득점률(%)", "등급", "시도ID", "회차"]
+    name_col = "이름" if "이름" in out.columns else ("이름.1" if "이름.1" in out.columns else None)
+
+    if not all(c in out.columns for c in required) or not name_col:
+        return out.drop_duplicates().reset_index(drop=True)
+
+    use_cols = []
+    for c in required + [name_col]:
+        if c not in use_cols:
+            use_cols.append(c)
+
+    for c in use_cols:
+        out[c] = out[c].fillna("").astype(str).replace({"nan": "", "NaT": ""}).str.strip()
+
+    emp = out["사번"].astype(str).str.strip()
+    org = out["소속기관"].astype(str).str.strip()
+    name = out[name_col].astype(str).str.strip()
+
+    out["_person_key"] = emp.where(emp != "", org + "|" + name)
+    out["_ended_sort"] = pd.to_datetime(out["종료시각"], errors="coerce")
+    out = out.sort_values(["_person_key", "_ended_sort"], ascending=[True, False])
+    out = out.drop_duplicates(subset=["_person_key"], keep="first")
+    out = out.drop(columns=["_person_key", "_ended_sort"]).reset_index(drop=True)
+    return out
 
 def _merge_results_for_admin() -> pd.DataFrame:
     """관리자 대시보드용 최종 결과. 현재 데이터 + 백업 데이터 병합."""
@@ -1999,7 +2035,7 @@ def _render_employee_lookup_popup_body(name_query: str = ""):
             emp_no_chk = str(row.get("employee_no", "")).strip()
             emp_name_chk = str(row.get("name", "")).strip()
             if _has_completed(emp_no_chk):
-                st.info(f"ℹ️ {emp_name_chk}님은 이미 2026 Compliance Adventure를 완료했습니다.\n\n(Already completed the 2026 Compliance Adventure.)")
+                st.info(f"ℹ️ {emp_name_chk}님은 이미 2026 컴플라이언스 어드벤처를 완료했습니다.")
                 st.stop()
 
             st.session_state.employee_selected_record = {
@@ -2791,8 +2827,13 @@ def render_admin_page():
                     existing_backup_df = existing_backup_df.copy()
                     existing_backup_df.columns = [str(c).strip() for c in existing_backup_df.columns]
 
+                existing_backup_df = _dedupe_final_result_backup_rows(existing_backup_df)
+                uploaded_df = _dedupe_final_result_backup_rows(uploaded_df)
+
                 before_rows = len(existing_backup_df)
-                preview_combined = pd.concat([existing_backup_df, uploaded_df], ignore_index=True).drop_duplicates().reset_index(drop=True)
+                preview_combined = _dedupe_final_result_backup_rows(
+                    pd.concat([existing_backup_df, uploaded_df], ignore_index=True)
+                )
                 after_rows = len(preview_combined)
                 added_rows = max(after_rows - before_rows, 0)
 
@@ -2802,13 +2843,13 @@ def render_admin_page():
                 col_c.metric("병합 후 예상 증가", f"{added_rows:,}건")
 
                 with st.form("admin_backup_merge_form", clear_on_submit=False):
-                    st.markdown("병합 버튼을 누르면 관리자 업로드 전용 백업 파일에 저장되고, 최종 결과 로그/기관 전광판에 즉시 반영됩니다.")
+                    st.markdown("병합 버튼을 누르면 관리자 업로드 전용 백업 파일에 **신규 완료자 1인 1건 기준(최신 종료시각 우선)** 으로 저장되고, 최종 결과 로그/기관 전광판에 즉시 반영됩니다.")
                     merge_clicked = st.form_submit_button("서버 데이터와 병합", use_container_width=True, type="primary")
 
                 if merge_clicked:
                     try:
-                        existing_backup_df = existing_backup_df.copy()
-                        uploaded_df = uploaded_df.copy()
+                        existing_backup_df = _dedupe_final_result_backup_rows(existing_backup_df.copy())
+                        uploaded_df = _dedupe_final_result_backup_rows(uploaded_df.copy())
 
                         if existing_backup_df.empty:
                             combined = uploaded_df
@@ -2816,7 +2857,7 @@ def render_admin_page():
                             combined = pd.concat([existing_backup_df, uploaded_df], ignore_index=True)
 
                         combined.columns = [str(c).strip() for c in combined.columns]
-                        combined = combined.drop_duplicates().reset_index(drop=True)
+                        combined = _dedupe_final_result_backup_rows(combined)
                         combined.to_csv(ADMIN_BACKUP_RESULTS_FILE, index=False, encoding="utf-8-sig")
 
                         st.session_state["admin_backup_merge_result"] = {
@@ -3525,14 +3566,14 @@ try:
             st.info("맵 이미지를 추가하면 인트로 연출이 더 좋아집니다.")
 
         st.markdown("<div style='height:10px;'></div>", unsafe_allow_html=True)
-        st.title("🛡️ 2026 Compliance Adventure")
-        st.caption("Guardian Training · 컴플라이언스 테마 정복형 학습")
+        st.title("🛡️ 2026 컴플라이언스 어드벤처")
+        st.caption("가디언 훈련 · 컴플라이언스 테마 정복형 학습")
 
         st.markdown(
             """
             <div class='card'>
               <div class='card-title gold-text'>교육 방식</div>
-              <div class='gold-text'>Select a theme from the map → Study the core briefing → Quiz (4 choices + short answer) → Conquer completed!</div>
+              <div class='gold-text'>맵에서 테마 선택 → 핵심 브리핑 학습 → 퀴즈 풀이(객관식 4지선다 + 단답형) → 정복 완료!</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -3752,7 +3793,7 @@ try:
         wrong_like = sum(1 for r in st.session_state.attempt_history if str(r.get("is_correct", "")) in ["N", "PARTIAL"])
 
         st.balloons()
-        st.title("🏆 Guardian Training Complete")
+        st.title("🏆 가디언 훈련 완료")
         st.success(f"{user_name} 가디언님, 모든 테마를 정복했습니다!")
 
         _ending_img = get_ending_image()
