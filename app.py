@@ -6,6 +6,7 @@ import io
 import time
 import uuid
 import base64
+import json
 import pandas as pd
 import numpy as np
 try:
@@ -649,6 +650,7 @@ BASE_DIR = Path(__file__).parent if "__file__" in globals() else Path.cwd()
 ASSET_DIR = BASE_DIR
 LOG_FILE = BASE_DIR / "compliance_training_log.csv"
 ADMIN_BACKUP_RESULTS_FILE = BASE_DIR / "admin_uploaded_results_backup.csv"
+ADMIN_SESSION_FILE = BASE_DIR / ".admin_dashboard_sessions.json"
 LOG_FIELDNAMES = [
     "timestamp",
     "training_attempt_id",
@@ -1013,6 +1015,168 @@ def compute_org_scoreboard() -> pd.DataFrame:
     return g[cols]
 
 
+def compute_company_dashboard_summary(sb: pd.DataFrame) -> dict:
+    """기관 전광판 집계를 바탕으로 전사 요약 KPI를 계산한다."""
+    if sb is None or sb.empty:
+        return {}
+
+    work = sb.copy()
+    numeric_cols = [
+        "participants", "target", "participation_rate",
+        "avg_score_rate", "score_sum_rate", "cumulative_score",
+    ]
+    for col in numeric_cols:
+        if col in work.columns:
+            work[col] = pd.to_numeric(work[col], errors="coerce")
+
+    work["participants"] = work.get("participants", 0).fillna(0).astype(int)
+    work["target"] = work.get("target", 0).fillna(0).astype(int)
+
+    total_orgs = int(len(work))
+    active_orgs = int((work["participants"] > 0).sum())
+    target_orgs = int((work["target"] > 0).sum())
+    total_participants = int(work["participants"].sum())
+    total_target = int(work["target"].sum())
+    overall_participation_rate = (total_participants / total_target * 100.0) if total_target > 0 else np.nan
+
+    if total_participants > 0 and "avg_score_rate" in work.columns:
+        weighted_avg_score = float((work["avg_score_rate"].fillna(0.0) * work["participants"]).sum() / max(total_participants, 1))
+    else:
+        weighted_avg_score = 0.0
+
+    total_score_sum = float(pd.to_numeric(work.get("score_sum_rate", 0), errors="coerce").fillna(0.0).sum())
+
+    last_activity = None
+    if "last_activity" in work.columns:
+        last_dt = pd.to_datetime(work["last_activity"], errors="coerce")
+        if last_dt.notna().any():
+            last_activity = last_dt.max()
+
+    top_row = work.sort_values(["rank"], ascending=[True]).iloc[0].to_dict() if "rank" in work.columns and not work.empty else work.iloc[0].to_dict()
+
+    rate_candidates = work[work["target"] > 0].copy()
+    if rate_candidates.empty:
+        best_rate_row = top_row
+        low_rate_row = top_row
+    else:
+        rate_candidates = rate_candidates.sort_values(["participation_rate", "participants"], ascending=[False, False])
+        best_rate_row = rate_candidates.iloc[0].to_dict()
+        low_rate_row = rate_candidates.sort_values(["participation_rate", "participants"], ascending=[True, True]).iloc[0].to_dict()
+
+    return {
+        "total_orgs": total_orgs,
+        "active_orgs": active_orgs,
+        "target_orgs": target_orgs,
+        "total_participants": total_participants,
+        "total_target": total_target,
+        "overall_participation_rate": overall_participation_rate,
+        "weighted_avg_score": round(weighted_avg_score, 1),
+        "total_score_sum": round(total_score_sum, 1),
+        "last_activity": last_activity,
+        "top_row": top_row,
+        "best_rate_row": best_rate_row,
+        "low_rate_row": low_rate_row,
+    }
+
+
+def render_company_dashboard(sb: pd.DataFrame) -> None:
+    """관리자 화면 상단의 전사 KPI 대시보드."""
+    summary = compute_company_dashboard_summary(sb)
+    if not summary:
+        st.info("전사 통계를 표시할 집계 데이터가 없습니다.")
+        return
+
+    st.subheader("📊 전사 통계 대시보드")
+    st.caption("기관별 참여 현황을 합산하여 회사 전체 참여율, 평균점수, 상·하위 기관 현황을 한눈에 보여줍니다.")
+
+    m1, m2, m3, m4, m5 = st.columns(5)
+    m1.metric("전체 참여자", f"{summary['total_participants']:,}명")
+    m2.metric("전체 목표 인원", f"{summary['total_target']:,}명")
+    m3.metric(
+        "전사 참여율",
+        "-" if pd.isna(summary["overall_participation_rate"]) else f"{float(summary['overall_participation_rate']):.1f}%"
+    )
+    m4.metric("전사 평균점수", f"{float(summary['weighted_avg_score']):.1f}점")
+    m5.metric("참여 기관", f"{summary['active_orgs']}/{summary['total_orgs']}개")
+
+    if summary["total_target"] > 0 and pd.notna(summary["overall_participation_rate"]):
+        progress_value = max(0.0, min(float(summary["overall_participation_rate"]) / 100.0, 1.0))
+        st.progress(progress_value, text=f"회사 전체 참여율 {float(summary['overall_participation_rate']):.1f}%")
+        remaining = max(summary["total_target"] - summary["total_participants"], 0)
+        st.caption(f"남은 목표 인원: {remaining:,}명 · 전사 점수합계: {float(summary['total_score_sum']):.1f}점")
+    else:
+        st.caption(f"전사 점수합계: {float(summary['total_score_sum']):.1f}점 · 목표 인원 파일이 없으면 참여율은 계산되지 않습니다.")
+
+    left, right = st.columns([1.0, 1.2], gap="large")
+    with left:
+        top_row = summary["top_row"]
+        best_rate_row = summary["best_rate_row"]
+        low_rate_row = summary["low_rate_row"]
+        recent_text = "-"
+        if summary.get("last_activity") is not None and pd.notna(summary.get("last_activity")):
+            try:
+                recent_text = pd.to_datetime(summary["last_activity"]).strftime("%Y-%m-%d %H:%M")
+            except Exception:
+                recent_text = str(summary["last_activity"])
+
+        st.markdown("#### 핵심 요약")
+        st.markdown(
+            f"""
+            <div class='card'>
+              <div class='card-title'>전사 현황 한눈에 보기</div>
+              <div>• 현재 <b>{summary['active_orgs']}개 기관</b>에서 참여 실적이 집계되었습니다.</div>
+              <div>• 랭킹 1위 기관은 <b>{top_row.get('organization', '-')}</b>이며 누적점수는 <b>{float(top_row.get('cumulative_score', 0) or 0):.1f}</b>점입니다.</div>
+              <div>• 참여율 최고 기관은 <b>{best_rate_row.get('organization', '-')}</b> (<b>{'-' if pd.isna(best_rate_row.get('participation_rate')) else f"{float(best_rate_row.get('participation_rate')):.1f}%"}</b>) 입니다.</div>
+              <div>• 저참여 관리기관은 <b>{low_rate_row.get('organization', '-')}</b> (<b>{'-' if pd.isna(low_rate_row.get('participation_rate')) else f"{float(low_rate_row.get('participation_rate')):.1f}%"}</b>) 입니다.</div>
+              <div>• 최근 교육 종료 시각은 <b>{recent_text}</b> 입니다.</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        focus_df = pd.DataFrame([
+            {
+                "구분": "랭킹 1위",
+                "기관": str(top_row.get("organization", "-")),
+                "참여율": "-" if pd.isna(top_row.get("participation_rate")) else f"{float(top_row.get('participation_rate')):.1f}%",
+                "평균점수": f"{float(top_row.get('avg_score_rate', 0) or 0):.1f}점",
+                "누적점수": f"{float(top_row.get('cumulative_score', 0) or 0):.1f}",
+            },
+            {
+                "구분": "참여율 최고",
+                "기관": str(best_rate_row.get("organization", "-")),
+                "참여율": "-" if pd.isna(best_rate_row.get("participation_rate")) else f"{float(best_rate_row.get('participation_rate')):.1f}%",
+                "평균점수": f"{float(best_rate_row.get('avg_score_rate', 0) or 0):.1f}점",
+                "누적점수": f"{float(best_rate_row.get('cumulative_score', 0) or 0):.1f}",
+            },
+            {
+                "구분": "저참여 관리",
+                "기관": str(low_rate_row.get("organization", "-")),
+                "참여율": "-" if pd.isna(low_rate_row.get("participation_rate")) else f"{float(low_rate_row.get('participation_rate')):.1f}%",
+                "평균점수": f"{float(low_rate_row.get('avg_score_rate', 0) or 0):.1f}점",
+                "누적점수": f"{float(low_rate_row.get('cumulative_score', 0) or 0):.1f}",
+            },
+        ])
+        st.dataframe(focus_df, use_container_width=True, hide_index=True)
+
+    with right:
+        st.markdown("#### 기관별 비교")
+        rate_chart_df = sb.copy()
+        rate_chart_df["참여율(%)"] = pd.to_numeric(rate_chart_df["participation_rate"], errors="coerce")
+        rate_chart_df = rate_chart_df[rate_chart_df["참여율(%)"].notna()].sort_values("참여율(%)", ascending=False)
+        if not rate_chart_df.empty:
+            st.caption("기관별 참여율 비교")
+            st.bar_chart(rate_chart_df.set_index("organization")[["참여율(%)"]], use_container_width=True)
+        else:
+            st.caption("목표 인원이 없는 기관은 참여율 차트에서 제외됩니다.")
+
+        score_chart_df = sb.copy().sort_values("avg_score_rate", ascending=False)
+        score_chart_df["평균점수(%)"] = pd.to_numeric(score_chart_df["avg_score_rate"], errors="coerce").fillna(0.0)
+        if not score_chart_df.empty:
+            st.caption("기관별 평균점수 비교")
+            st.bar_chart(score_chart_df.set_index("organization")[["평균점수(%)"]], use_container_width=True)
+
+
 def render_org_electronic_board_sidebar():
     """좌측 사이드바 전광판(기관 현황).
 
@@ -1125,6 +1289,148 @@ EMPLOYEE_COL_ALIASES = {
 # 구버전 단계별 파일명도 fallback 지원 (기존 운영 호환)
 
 ADMIN_PASSWORD = os.environ.get("COMPLIANCE_ADMIN_PASSWORD", "admin2026")
+ADMIN_SESSION_TTL_SECONDS = int(os.environ.get("COMPLIANCE_ADMIN_SESSION_TTL_SECONDS", str(12 * 60 * 60)))
+
+def _get_query_param(name: str, default: str = "") -> str:
+    try:
+        val = st.query_params.get(name, default)
+    except Exception:
+        try:
+            val = st.experimental_get_query_params().get(name, [default])
+        except Exception:
+            val = default
+    if isinstance(val, list):
+        return str(val[-1]) if val else str(default)
+    return str(val)
+
+def _set_query_param(name: str, value: str) -> None:
+    try:
+        st.query_params[name] = str(value)
+        return
+    except Exception:
+        pass
+    try:
+        params = st.experimental_get_query_params()
+        params[name] = str(value)
+        st.experimental_set_query_params(**params)
+    except Exception:
+        pass
+
+def _delete_query_param(name: str) -> None:
+    try:
+        qp = st.query_params
+        if name in qp:
+            del qp[name]
+        return
+    except Exception:
+        pass
+    try:
+        params = st.experimental_get_query_params()
+        params.pop(name, None)
+        st.experimental_set_query_params(**params)
+    except Exception:
+        pass
+
+def _load_admin_session_registry() -> dict:
+    if not ADMIN_SESSION_FILE.exists():
+        return {}
+    try:
+        raw = ADMIN_SESSION_FILE.read_text(encoding='utf-8')
+        data = json.loads(raw) if raw.strip() else {}
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+def _save_admin_session_registry(data: dict) -> None:
+    ADMIN_SESSION_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
+
+def _purge_expired_admin_sessions() -> dict:
+    now_ts = time.time()
+    data = _load_admin_session_registry()
+    cleaned = {}
+    for token, meta in data.items():
+        try:
+            expires_at = float((meta or {}).get('expires_at', 0) or 0)
+        except Exception:
+            expires_at = 0
+        if expires_at > now_ts:
+            cleaned[str(token)] = dict(meta or {})
+    if cleaned != data:
+        try:
+            _save_admin_session_registry(cleaned)
+        except Exception:
+            pass
+    return cleaned
+
+def _create_admin_persisted_session() -> str:
+    now_ts = time.time()
+    token = f"{uuid.uuid4().hex}{uuid.uuid4().hex}"
+    data = _purge_expired_admin_sessions()
+    data[token] = {
+        'created_at': now_ts,
+        'expires_at': now_ts + max(300, int(ADMIN_SESSION_TTL_SECONDS or 0)),
+    }
+    _save_admin_session_registry(data)
+    return token
+
+def _persist_admin_auth(keep_admin_view: bool = True) -> None:
+    try:
+        token = _get_query_param('admin_session_token', '').strip()
+        data = _purge_expired_admin_sessions()
+        if token and token in data:
+            data[token]['expires_at'] = time.time() + max(300, int(ADMIN_SESSION_TTL_SECONDS or 0))
+            _save_admin_session_registry(data)
+        else:
+            token = _create_admin_persisted_session()
+        _set_query_param('admin_session_token', token)
+        if keep_admin_view:
+            _set_query_param('admin_view', '1')
+        else:
+            _delete_query_param('admin_view')
+    except Exception:
+        pass
+
+def _clear_persisted_admin_auth() -> None:
+    token = _get_query_param('admin_session_token', '').strip()
+    if token:
+        try:
+            data = _purge_expired_admin_sessions()
+            if token in data:
+                data.pop(token, None)
+                _save_admin_session_registry(data)
+        except Exception:
+            pass
+    _delete_query_param('admin_session_token')
+    _delete_query_param('admin_view')
+
+def _restore_admin_auth_from_persisted_session() -> None:
+    if bool(st.session_state.get('admin_authed', False)):
+        return
+    token = _get_query_param('admin_session_token', '').strip()
+    if not token:
+        return
+    data = _purge_expired_admin_sessions()
+    meta = data.get(token)
+    if not isinstance(meta, dict):
+        _clear_persisted_admin_auth()
+        return
+    try:
+        expires_at = float(meta.get('expires_at', 0) or 0)
+    except Exception:
+        expires_at = 0
+    if expires_at <= time.time():
+        _clear_persisted_admin_auth()
+        return
+    st.session_state.admin_authed = True
+    data[token]['expires_at'] = time.time() + max(300, int(ADMIN_SESSION_TTL_SECONDS or 0))
+    try:
+        _save_admin_session_registry(data)
+    except Exception:
+        pass
+    admin_view = _get_query_param('admin_view', '').strip().lower()
+    if admin_view in {'1', 'true', 'yes', 'admin'}:
+        st.session_state.stage = 'admin'
+
 
 # =========================================================
 # 3) 콘텐츠 데이터 (브리핑 + 퀴즈)
@@ -2696,6 +3002,8 @@ def render_admin_password_gate():
         if st.button("관리자 인증", use_container_width=True):
             if pwd == ADMIN_PASSWORD:
                 st.session_state.admin_authed = True
+                st.session_state.stage = "admin"
+                _persist_admin_auth(keep_admin_view=True)
                 try:
                     st.toast("관리자 인증 완료", icon="✅")
                 except Exception:
@@ -2720,22 +3028,31 @@ def render_admin_page():
         render_admin_password_gate()
         return
 
+    _persist_admin_auth(keep_admin_view=True)
     st.success("관리자 인증 완료")
-    c1, c2, c3 = st.columns([1,1,1])
+    c1, c2, c3, c4 = st.columns([1,1,1,1])
     with c1:
-        if st.button("🗺️ 맵으로 돌아가기", use_container_width=True):
-            st.session_state.stage = "map" if st.session_state.get("user_info") else "intro"
+        if st.button("🔄 데이터 새로고침", use_container_width=True):
+            _persist_admin_auth(keep_admin_view=True)
             st.rerun()
     with c2:
-        if st.button("🏠 첫 화면", use_container_width=True):
-            st.session_state.stage = "intro"
+        if st.button("🗺️ 맵으로 돌아가기", use_container_width=True):
+            _persist_admin_auth(keep_admin_view=False)
+            st.session_state.stage = "map" if st.session_state.get("user_info") else "intro"
             st.rerun()
     with c3:
+        if st.button("🏠 첫 화면", use_container_width=True):
+            _persist_admin_auth(keep_admin_view=False)
+            st.session_state.stage = "intro"
+            st.rerun()
+    with c4:
         if st.button("🔓 로그아웃", use_container_width=True):
             st.session_state.admin_authed = False
+            _clear_persisted_admin_auth()
             st.rerun()
 
-    
+    st.caption("※ 현재 브라우저에서 관리자 인증이 일정 시간 유지됩니다. 새로고침 시 최신 데이터를 다시 읽어옵니다.")
+
     tab_org, tab_log = st.tabs(["🏢 기관 전광판", "📄 최종 결과 로그"])
 
     with tab_org:
@@ -2743,13 +3060,16 @@ def render_admin_page():
         if sb.empty:
             st.info("아직 집계된 최종 결과가 없습니다.")
         else:
-            st.subheader("기관별 참여·점수 현황")
-            st.dataframe(
-                sb.rename(columns={
-                    "rank":"순위","organization":"기관","participants":"참여자(명)","target":"목표(명)",
-                    "participation_rate":"참여율(%)","participation_rate_score":"참여율점수",
-                    "avg_score_rate":"평균점수(%)","cumulative_score":"누적점수(=참여율점수+평균점수)","score_sum_rate":"점수합계(%)","last_activity":"최근 종료"
-                }),
+            render_company_dashboard(sb)
+            st.write("")
+            st.subheader("🏢 기관별 참여·점수 현황")
+            board_view = sb.rename(columns={
+                "rank":"순위","organization":"기관","participants":"참여자(명)","target":"목표(명)",
+                "participation_rate":"참여율(%)","participation_rate_score":"참여율점수",
+                "avg_score_rate":"평균점수(%)","cumulative_score":"누적점수(=참여율점수+평균점수)","score_sum_rate":"점수합계(%)","last_activity":"최근 종료"
+            })
+            safe_dataframe(
+                board_view,
                 use_container_width=True,
                 hide_index=True,
             )
@@ -3514,6 +3834,7 @@ def render_quiz(m_key: str):
 # 7) 메인 화면 분기
 # =========================================================
 init_state()
+_restore_admin_auth_from_persisted_session()
 
 # Ensure result/log schema files are created once after deployment (prevents missing counts/records)
 try:
@@ -3547,12 +3868,14 @@ with st.sidebar:
     # 사이드바에는 관리자 대시보드만 노출합니다. (기관 전광판은 관리자 대시보드 내에서만 확인)
     st.caption("관리자")
     if st.button("🔐 관리자 대시보드", use_container_width=True):
-
+        if st.session_state.get("admin_authed", False):
+            _persist_admin_auth(keep_admin_view=True)
         st.session_state.stage = "admin"
         st.rerun()
     if st.session_state.get("admin_authed", False):
         if st.button("🔓 관리자 로그아웃", use_container_width=True):
             st.session_state.admin_authed = False
+            _clear_persisted_admin_auth()
             st.rerun()
 
 try:
