@@ -1,8 +1,4 @@
 import streamlit as st
-# 한글화 과정에서 사용된 별칭 API 지원 (기능/레이아웃은 그대로 유지)
-# - st.재실행(): Streamlit의 st.rerun()에 해당
-if not hasattr(st, "재실행"):
-    st.재실행 = st.rerun
 from datetime import datetime
 from pathlib import Path
 import csv
@@ -20,9 +16,10 @@ import streamlit.components.v1 as components
 
 
 def scroll_to_top(delay_ms: int = 0) -> None:
-    """스크롤을 최상단으로 이동(최대한 보수적으로 동작).
+    """Best-effort scroll-to-top.
 
-    Streamlit은 재실행/화면 전환 시 스크롤 위치를 유지하는 경우가 있습니다. 이 헬퍼는 브라우저 뷰포트를 최상단으로 강제 이동시켜 중요한 제목/버튼이 보이도록 합니다.
+    Streamlit may preserve scroll position across reruns/navigation. This helper forces
+    the browser viewport back to the top so critical titles/buttons are visible.
     """
     js = f"""
     <script>
@@ -48,7 +45,7 @@ import random
 # =========================================================
 # 1) 페이지 설정 / 스타일
 # =========================================================
-st.set_page_config(page_title="2026 컴플라이언스 어드벤처", layout="wide")
+st.set_page_config(page_title="2026 Compliance Adventure", layout="wide")
 
 st.markdown("""
 <style>
@@ -139,7 +136,7 @@ div.stButton > button:first-child:hover {
     filter: brightness(1.05);
 }
 
-/* 주요 액션 버튼용 골드 블러(은은하게) */
+/* Gold blur (subtle) for key action buttons */
 div.stButton > button[kind="primary"] {
     background: linear-gradient(135deg, rgba(212,175,55,0.35), rgba(212,175,55,0.18)) !important;
     border: 1px solid rgba(212,175,55,0.42) !important;
@@ -154,7 +151,7 @@ div.stButton > button[kind="primary"]:hover {
     box-shadow: 0 8px 22px rgba(212,175,55,0.16) !important;
 }
 
-/* 비활성 버튼 가독성 */
+/* Disabled button readability */
 div.stButton > button:disabled {
     opacity: 0.55 !important;
     cursor: not-allowed !important;
@@ -444,7 +441,7 @@ div[data-testid="stDialog"] button[kind="header"] svg {
 }
 
 
-/* 핵심 문구 골드 강조 */
+/* Gold highlight for key phrases */
 .gold {
     color: #D4AF37 !important;
     font-weight: 900 !important;
@@ -456,7 +453,7 @@ div[data-testid="stDialog"] button[kind="header"] svg {
     white-space: normal;
 }
 
-/* 골드 텍스트(과한 블러 없음) */
+/* Gold text (no bright blur) */
 .gold-text {
     color: #D4AF37 !important;
     font-weight: 900 !important;
@@ -467,7 +464,7 @@ div[data-testid="stDialog"] button[kind="header"] svg {
     color: #D4AF37 !important;
 }
 
-/* 토스트(우상단 팝업) 가독성 보정 (Streamlit st.toast) */
+/* Toast (top-right popup) readability fix (Streamlit st.toast) */
 div[data-testid="stToast"], div[data-testid="stToast"] > div {
     background: rgba(17,24,39,0.96) !important;
     color: rgba(255,255,255,0.96) !important;
@@ -478,7 +475,7 @@ div[data-testid="stToast"] * {
     color: rgba(255,255,255,0.96) !important;
 }
 
-/* Streamlit 구/신버전 호환 셀렉터 */
+/* Fallback selectors for older/newer Streamlit builds */
 .stToast, .stToast > div {
     background: rgba(17,24,39,0.96) !important;
     color: rgba(255,255,255,0.96) !important;
@@ -488,7 +485,7 @@ div[data-testid="stToast"] * {
 
 
 
-/* 맵 단계 상태 박스(흐름 안내) */
+/* Stage status boxes on map (flow guidance) */
 .stage-box {
     border-radius: 12px;
     padding: 10px 12px;
@@ -515,7 +512,7 @@ div[data-testid="stToast"] * {
     color: #F7FFF9;
 }
 
-/* 사이드바 가독성(전광판) */
+/* Sidebar readability (electronic board) */
 [data-testid="stSidebar"] {
     background-color: #0B1220 !important;
     color: #EAEAEA !important;
@@ -573,7 +570,7 @@ def safe_dataframe(data, **kwargs):
         try:
             return st.dataframe(df_obj, **local_kwargs)
         except Exception:
-            # 마지막 대체
+            # 마지막 fallback
             if isinstance(df_obj, pd.DataFrame):
                 st.write(df_obj)
             else:
@@ -590,7 +587,7 @@ def safe_button(label: str, *, key: str | None = None, use_container_width: bool
     """
     Streamlit 버전별 버튼 API 차이를 흡수하는 안전 래퍼.
     - 최신: st.button(..., type="primary") 지원
-    - 구버전: type 인자를 받지 않으므로 자동 대체
+    - 구버전: type 인자를 받지 않으므로 자동 fallback
     """
     if not primary:
         return st.button(label, key=key, use_container_width=use_container_width, disabled=disabled)
@@ -639,7 +636,7 @@ def safe_bar_chart(data, **kwargs):
     try:
         st.bar_chart(chart_df, **kwargs)
     except Exception:
-        # 마지막 대체: 원본 표로 표시
+        # 마지막 fallback: 원본 표로 표시
         st.info("차트를 표시하지 못해 표로 대신 보여드립니다.")
         safe_dataframe(chart_df, use_container_width=True)
 
@@ -698,97 +695,151 @@ def _ensure_results_file():
             w.writeheader()
 
 
-def _load_final_results_backup_df() -> pd.DataFrame:
-    """
-    백업 CSV(compliance_training_log.csv)가 이미 '참가자 최종 결과(1인 1레코드)' 형식으로 저장된 경우,
-    이를 training_results.csv와 동일한 스키마로 변환해 복원용 소스로 사용한다.
+def _normalize_empno_for_results(value) -> str:
+    s = str(value or "").strip()
+    if s.endswith(".0"):
+        s = s[:-2]
+    return s
 
-    기대 컬럼(한글):
-      사번, 이름, 소속기관, 참여시각, 종료시각, 참여시간(초), 최종점수, 득점률(%), 등급, 시도ID, 회차
-    """
-    candidates = []
-    try:
-        candidates.extend(sorted(BASE_DIR.glob("compliance_training_log*.csv"), reverse=True))
-    except Exception:
-        pass
+def _normalize_name_for_results(value) -> str:
+    return str(value or "").strip()
 
-    for p in candidates:
+def _normalize_org_for_results(value) -> str:
+    s = str(value or "").strip()
+    return s or "미분류"
+
+def _participant_key_from_row(row: pd.Series) -> str:
+    emp = _normalize_empno_for_results(row.get("employee_no", ""))
+    if emp:
+        return emp
+    org = _normalize_org_for_results(row.get("organization", ""))
+    name = _normalize_name_for_results(row.get("name", "")).replace(" ", "")
+    return f"{org}|{name}"
+
+def _read_participant_backup_results() -> pd.DataFrame:
+    """백업 파일(compliance_training_log.csv / training_results.csv.bak_*)을 최종결과 형식으로 읽는다."""
+    frames = []
+
+    # 1) 최종결과 백업
+    for fp in sorted(BASE_DIR.glob("training_results.csv.bak_*")):
         try:
-            raw = pd.read_csv(p, dtype=str, encoding="utf-8-sig")
+            raw = pd.read_csv(fp, dtype=str, encoding="utf-8-sig")
         except Exception:
             try:
-                raw = pd.read_csv(p, dtype=str, encoding="utf-8")
+                raw = pd.read_csv(fp, dtype=str, encoding="utf-8")
             except Exception:
                 continue
-
         if raw is None or raw.empty:
             continue
+        if set(RESULT_FIELDNAMES).issubset(set(map(str, raw.columns))):
+            df = raw.copy()
+            for c in RESULT_FIELDNAMES:
+                if c not in df.columns:
+                    df[c] = ""
+            frames.append(df[RESULT_FIELDNAMES].copy())
 
-        cols = set(map(str, raw.columns))
-        required = {"사번", "이름", "소속기관", "참여시각", "종료시각", "참여시간(초)", "최종점수", "득점률(%)", "등급", "시도ID"}
-        if not required.issubset(cols):
-            # 문항별 상세 로그 형태면 여기서 제외한다.
+    # 2) 현재 업로드된 compliance_training_log.csv 는 실제로 1인 1레코드 백업 구조
+    for fp in sorted(BASE_DIR.glob("compliance_training_log*.csv")):
+        try:
+            raw = pd.read_csv(fp, dtype=str, encoding="utf-8-sig")
+        except Exception:
+            try:
+                raw = pd.read_csv(fp, dtype=str, encoding="utf-8")
+            except Exception:
+                continue
+        if raw is None or raw.empty:
             continue
+        cols = set(map(str, raw.columns))
+        if {"사번","소속기관","참여시각","종료시각","참여시간(초)","최종점수","득점률(%)","등급","시도ID","회차"}.issubset(cols):
+            name_col = "이름.1" if "이름.1" in raw.columns else ("이름" if "이름" in raw.columns else "")
+            df = pd.DataFrame({
+                "employee_no": raw.get("사번", ""),
+                "name": raw.get(name_col, ""),
+                "organization": raw.get("소속기관", ""),
+                "participated_at": raw.get("참여시각", ""),
+                "ended_at": raw.get("종료시각", ""),
+                "duration_sec": raw.get("참여시간(초)", ""),
+                "final_score": raw.get("최종점수", ""),
+                "score_rate": raw.get("득점률(%)", ""),
+                "grade": raw.get("등급", ""),
+                "training_attempt_id": raw.get("시도ID", ""),
+                "attempt_round": raw.get("회차", ""),
+            })
+            frames.append(df[RESULT_FIELDNAMES].copy())
 
-        df = pd.DataFrame({
-            "employee_no": raw.get("사번", "").fillna("").astype(str),
-            "name": raw.get("이름", "").fillna("").astype(str),
-            "organization": raw.get("소속기관", "").fillna("").astype(str),
-            "participated_at": raw.get("참여시각", "").fillna("").astype(str),
-            "ended_at": raw.get("종료시각", "").fillna("").astype(str),
-            "duration_sec": raw.get("참여시간(초)", "").fillna("").astype(str),
-            "final_score": raw.get("최종점수", "").fillna("").astype(str),
-            "score_rate": raw.get("득점률(%)", "").fillna("").astype(str),
-            "grade": raw.get("등급", "").fillna("").astype(str),
-            "training_attempt_id": raw.get("시도ID", "").fillna("").astype(str),
-            "attempt_round": raw.get("회차", "").fillna("").astype(str),
-        })
+    if not frames:
+        return pd.DataFrame(columns=RESULT_FIELDNAMES)
 
-        for c in RESULT_FIELDNAMES:
-            if c not in df.columns:
-                df[c] = ""
+    merged = pd.concat(frames, ignore_index=True)
+    for c in RESULT_FIELDNAMES:
+        if c not in merged.columns:
+            merged[c] = ""
+    merged["employee_no"] = merged["employee_no"].apply(_normalize_empno_for_results)
+    merged["name"] = merged["name"].apply(_normalize_name_for_results)
+    merged["organization"] = merged["organization"].apply(_normalize_org_for_results)
+    merged["_ended_sort"] = pd.to_datetime(merged["ended_at"], errors="coerce")
+    merged["_participant_key"] = merged.apply(_participant_key_from_row, axis=1)
+    merged = merged.sort_values("_ended_sort", ascending=False).drop_duplicates(subset=["_participant_key"], keep="first")
+    merged = merged.drop(columns=["_ended_sort", "_participant_key"], errors="ignore")
+    return merged[RESULT_FIELDNAMES].copy()
 
-        # 1인 1레코드가 아니어도 안전하게 한 번 더 정리
-        for c in ["employee_no", "name", "organization", "ended_at"]:
-            df[c] = df[c].fillna("").astype(str).str.strip()
+def _create_results_backup():
+    if RESULTS_FILE.exists():
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        shutil.copy2(RESULTS_FILE, RESULTS_FILE.with_name(f"{RESULTS_FILE.name}.bak_{ts}"))
 
-        key = df["employee_no"].where(df["employee_no"].ne(""), df["organization"] + "|" + df["name"])
-        df["_participant_key"] = key
-        df["_ended_at_dt"] = pd.to_datetime(df["ended_at"], errors="coerce")
-        df = df.sort_values(["_participant_key", "_ended_at_dt"], ascending=[True, False]).drop_duplicates("_participant_key", keep="first")
-        df = df.drop(columns=["_participant_key", "_ended_at_dt"], errors="ignore")
-        return df[RESULT_FIELDNAMES].copy()
-
-    return pd.DataFrame(columns=RESULT_FIELDNAMES)
-
+def _load_org_export_backup_df() -> pd.DataFrame:
+    cols = [
+        "rank","organization","participants","target",
+        "participation_rate","participation_rate_score",
+        "avg_score_rate","cumulative_score","score_sum_rate",
+        "last_activity",
+    ]
+    for fp in sorted(BASE_DIR.glob("*_export.csv"), key=lambda x: x.stat().st_mtime, reverse=True):
+        try:
+            raw = pd.read_csv(fp, dtype=str, encoding="utf-8-sig")
+        except Exception:
+            try:
+                raw = pd.read_csv(fp, dtype=str, encoding="utf-8")
+            except Exception:
+                continue
+        if raw is None or raw.empty:
+            continue
+        need = {"순위","기관","참여자(명)","목표(명)","참여율(%)","참여율점수","평균점수(%)","누적점수(=참여율점수+평균점수)","점수합계(%)","최근 종료"}
+        if not need.issubset(set(map(str, raw.columns))):
+            continue
+        out = pd.DataFrame()
+        out["rank"] = pd.to_numeric(raw["순위"], errors="coerce")
+        out["organization"] = raw["기관"].apply(_normalize_org_for_results)
+        out["participants"] = pd.to_numeric(raw["참여자(명)"], errors="coerce").fillna(0).astype(int)
+        out["target"] = pd.to_numeric(raw["목표(명)"], errors="coerce").fillna(0).astype(int)
+        out["participation_rate"] = pd.to_numeric(raw["참여율(%)"], errors="coerce")
+        out["participation_rate_score"] = pd.to_numeric(raw["참여율점수"], errors="coerce")
+        out["avg_score_rate"] = pd.to_numeric(raw["평균점수(%)"], errors="coerce")
+        out["cumulative_score"] = pd.to_numeric(raw["누적점수(=참여율점수+평균점수)"], errors="coerce")
+        out["score_sum_rate"] = pd.to_numeric(raw["점수합계(%)"], errors="coerce")
+        out["last_activity"] = raw["최근 종료"].fillna("").astype(str).str.strip()
+        return out[cols]
+    return pd.DataFrame(columns=cols)
 
 def _load_results_df() -> pd.DataFrame:
-    """
-    최종 결과 로딩 우선순위
-    1) training_results.csv
-    2) compliance_training_log.csv(이미 1인 1레코드 백업 형식인 경우)
-    3) 두 소스를 병합하되, 같은 참가자는 최근 종료시각 1건 유지
-    """
+    """라이브 결과 + 백업 결과를 함께 읽어 1인 1레코드로 병합한다."""
     frames = []
 
     if RESULTS_FILE.exists():
         try:
-            df_live = pd.read_csv(RESULTS_FILE, dtype=str, encoding="utf-8-sig")
+            live_df = pd.read_csv(RESULTS_FILE, dtype=str, encoding="utf-8-sig")
         except Exception:
             try:
-                df_live = pd.read_csv(RESULTS_FILE, dtype=str, encoding="utf-8")
+                live_df = pd.read_csv(RESULTS_FILE, dtype=str, encoding="utf-8")
             except Exception:
-                df_live = pd.DataFrame(columns=RESULT_FIELDNAMES)
-        if df_live is not None and not df_live.empty:
-            df_live = df_live.copy()
-            for c in RESULT_FIELDNAMES:
-                if c not in df_live.columns:
-                    df_live[c] = ""
-            frames.append(df_live[RESULT_FIELDNAMES].copy())
+                live_df = pd.DataFrame(columns=RESULT_FIELDNAMES)
+        if live_df is not None and not live_df.empty:
+            frames.append(live_df.copy())
 
-    df_backup = _load_final_results_backup_df()
-    if df_backup is not None and not df_backup.empty:
-        frames.append(df_backup[RESULT_FIELDNAMES].copy())
+    backup_df = _read_participant_backup_results()
+    if backup_df is not None and not backup_df.empty:
+        frames.append(backup_df.copy())
 
     if not frames:
         return pd.DataFrame(columns=RESULT_FIELDNAMES)
@@ -797,17 +848,14 @@ def _load_results_df() -> pd.DataFrame:
     for c in RESULT_FIELDNAMES:
         if c not in df.columns:
             df[c] = ""
-
-    for c in ["employee_no", "name", "organization", "ended_at"]:
-        df[c] = df[c].fillna("").astype(str).str.strip()
-
-    df["_participant_key"] = df["employee_no"].where(df["employee_no"].ne(""), df["organization"] + "|" + df["name"])
-    df["_ended_at_dt"] = pd.to_datetime(df["ended_at"], errors="coerce")
-    df = df.sort_values(["_participant_key", "_ended_at_dt"], ascending=[True, False]).drop_duplicates("_participant_key", keep="first")
-    df = df.drop(columns=["_participant_key", "_ended_at_dt"], errors="ignore")
+    df["employee_no"] = df["employee_no"].apply(_normalize_empno_for_results)
+    df["name"] = df["name"].apply(_normalize_name_for_results)
+    df["organization"] = df["organization"].apply(_normalize_org_for_results)
+    df["_ended_sort"] = pd.to_datetime(df["ended_at"], errors="coerce")
+    df["_participant_key"] = df.apply(_participant_key_from_row, axis=1)
+    df = df.sort_values("_ended_sort", ascending=False).drop_duplicates(subset=["_participant_key"], keep="first")
+    df = df.drop(columns=["_ended_sort", "_participant_key"], errors="ignore")
     return df[RESULT_FIELDNAMES].copy()
-
-
 
 def _has_completed(employee_no: str) -> bool:
     employee_no = str(employee_no or "").strip()
@@ -821,15 +869,25 @@ def _has_completed(employee_no: str) -> bool:
 def _upsert_final_result(row: dict) -> None:
     _ensure_results_file()
     row = {k: ("" if row.get(k) is None else row.get(k)) for k in RESULT_FIELDNAMES}
+    row["employee_no"] = _normalize_empno_for_results(row.get("employee_no", ""))
+    row["name"] = _normalize_name_for_results(row.get("name", ""))
+    row["organization"] = _normalize_org_for_results(row.get("organization", ""))
+
     df = _load_results_df()
-    emp = str(row.get("employee_no", "")).strip()
-    if emp:
-        df = df[df["employee_no"].astype(str).str.strip() != emp].copy()
+    row_key = _participant_key_from_row(pd.Series(row))
+    if not df.empty:
+        df["_participant_key"] = df.apply(_participant_key_from_row, axis=1)
+        df = df[df["_participant_key"] != row_key].drop(columns=["_participant_key"], errors="ignore").copy()
+
     df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
     if "ended_at" in df.columns:
         df["_ended_sort"] = pd.to_datetime(df["ended_at"], errors="coerce")
         df = df.sort_values("_ended_sort", ascending=False).drop(columns=["_ended_sort"])
-    df.to_csv(RESULTS_FILE, index=False, encoding="utf-8-sig")
+
+    _create_results_backup()
+    tmp_path = RESULTS_FILE.with_suffix(".tmp.csv")
+    df.to_csv(tmp_path, index=False, encoding="utf-8-sig")
+    tmp_path.replace(RESULTS_FILE)
 
 def save_final_result_if_needed(force: bool = False) -> None:
     if st.session_state.get("final_result_saved", False) and not force:
@@ -1063,7 +1121,7 @@ MAP_STAGE_IMAGES = {
     2: ASSET_DIR / "world_map_2.png",
     3: ASSET_DIR / "world_map_3.png",
 }
-DEFAULT_MAP_IMAGE = ASSET_DIR / "world_map.png"  # 선택 (대체)
+DEFAULT_MAP_IMAGE = ASSET_DIR / "world_map.png"  # 선택 (fallback)
 MASTER_IMAGE = ASSET_DIR / "master.png"
 ENDING_IMAGE_CANDIDATE_NAMES = [
     "ending_final.png", "final_stage.png", "ending.png", "final.png",
@@ -1096,7 +1154,7 @@ EMPLOYEE_COL_ALIASES = {
     "organization": ["organization", "org", "department", "dept", "소속", "소속기관", "기관", "조직", "본부", "부서"],
 }
 
-# 구버전 단계별 파일명도 대체 지원 (기존 운영 호환)
+# 구버전 단계별 파일명도 fallback 지원 (기존 운영 호환)
 
 ADMIN_PASSWORD = os.environ.get("COMPLIANCE_ADMIN_PASSWORD", "admin2026")
 
@@ -1160,15 +1218,15 @@ SCENARIOS = {'subcontracting': {'title': '🚜 하도급의 계곡',
                                                '처리/기록 조치': {'keywords': ['협의', '서면', '기록', '문서', '정산 기준', '확인 후'], 'weight': 3, 'min_hits': 2}}}]},
  'security': {'title': '🔐 정보보안의 요새',
               'briefing': {'title': '정보보안 기본 원칙 브리핑',
-                           'summary': '정보보안의 기본 원칙은 <span class="gold">최소권한(업무상 필요 최소 범위)</span>, <span class="gold">데이터 분류·암호화</span>, <span class="gold">접근기록(로그)과 이상징후 모니터링</span>입니다. 업무 편의로 권한을 넓히거나 자료를 개인 저장소로 옮기는 순간, 사고 발생 시 책임이 개인에게 집중될 수 있으니 <span class="gold">반출·공유·권한</span>은 반드시 절차대로 처리하세요.',
+                           'summary': '정보보안의 기본 원칙은 <span class="gold">최소권한(Need-to-know)</span>, <span class="gold">데이터 분류·암호화</span>, <span class="gold">접근기록(로그)과 이상징후 모니터링</span>입니다. 업무 편의로 권한을 넓히거나 자료를 개인 저장소로 옮기는 순간, 사고 발생 시 책임이 개인에게 집중될 수 있으니 <span class="gold">반출·공유·권한</span>은 반드시 절차대로 처리하세요.',
                            'keywords': ['피싱 메일', '계정정보 보호', '사고 즉시보고', '개인정보'],
                            'red_flags': ['긴급결재·택배조회 등을 빙자한 링크 클릭 유도 메일',
-                                         '비밀번호·오티피·인증코드를 메신저/메일로 요청하는 행위',
+                                         '비밀번호·OTP·인증코드를 메신저/메일로 요청하는 행위',
                                          '이상 로그인/파일 암호화 징후를 발견했는데 개인적으로만 처리'],
                            'checklist': ['권한 부여/변경 시 <span class="gold">최소권한</span> 원칙 점검(불필요 권한 즉시 회수)',
                                                '대외 공유 전 <span class="gold">대상 데이터 등급</span> 확인 및 마스킹/암호화 적용',
                                                '개인 메일·메신저·개인 클라우드로 업무자료 이동 금지(필요 시 <span class="gold">승인된 채널</span> 사용)',
-                                               '유에스비/외장매체 사용 시 <span class="gold">반출 승인·기록</span> 및 사용 후 즉시 삭제/반납']},
+                                               'USB/외장매체 사용 시 <span class="gold">반출 승인·기록</span> 및 사용 후 즉시 삭제/반납']},
               'quiz': [{'type': 'mcq',
                         'code': 'IS-1',
                         'score': 35,
@@ -1176,12 +1234,12 @@ SCENARIOS = {'subcontracting': {'title': '🚜 하도급의 계곡',
                         'options': ['회사 공지 메일에 사내 포털 링크가 포함되어 있다',
                                     '발신자 주소가 유사하지만 다른 도메인이고, 압축파일 실행을 요구한다',
                                     '회의 일정 안내 메일에 회의실 정보가 포함되어 있다',
-                                    '업무 메일에 결재 문서 피디에프가 첨부되어 있다'],
+                                    '업무 메일에 결재 문서 PDF가 첨부되어 있다'],
                         'answer': 1,
                         'choice_feedback': ['링크 자체만으로는 피싱 여부를 단정할 수 없고, 도메인·URL 검증이 필요합니다.',
                                             '정답입니다. 유사 도메인 + 실행파일/압축파일 유도는 대표적인 피싱 징후입니다.',
                                             '일반적인 업무 안내 형태로, 추가 검증 요소가 더 필요합니다.',
-                                            '피디에프 첨부만으로는 판단하기 어렵고 발신자/맥락 확인이 먼저입니다.'],
+                                            'PDF 첨부만으로는 판단하기 어렵고 발신자/맥락 확인이 먼저입니다.'],
                         'explain': '피싱 메일은 실제 조직명을 흉내 낸 유사 도메인, 긴급한 표현, 실행형 첨부파일 요구가 자주 나타납니다. 특히 압축파일/실행파일은 악성코드 감염의 '
                                    '주요 경로입니다.',
                         'wrong_extra': '“바빠서 일단 열어보자”가 사고의 출발점이 됩니다. 의심되면 클릭 전에 보안팀 확인이 우선입니다.'},
@@ -1208,7 +1266,7 @@ SCENARIOS = {'subcontracting': {'title': '🚜 하도급의 계곡',
                         'sample_answer': '의심 링크 클릭으로 계정정보 노출 가능성이 있어 즉시 비밀번호를 변경하고 추가 로그인 여부를 확인하겠습니다. 동시에 보안담당자와 헬프데스크에 사고 사실을 보고하고 접속기록 점검을 요청하겠습니다.',
                         'model_answer': '예시 답변: “의심 메일 링크 클릭으로 계정정보가 노출됐을 가능성이 있어 즉시 비밀번호를 변경하고 필요한 경우 로그아웃/차단 조치를 진행하겠습니다. 이후 보안담당자와 헬프데스크에 사고 사실을 바로 보고하고, 계정 접속기록 점검과 추가 대응 안내를 요청하겠습니다.”',
                         'rubric_keywords': {'사고 상황 인지': {'keywords': ['의심', '메일', '링크', '계정', '입력', '노출'], 'weight': 2, 'min_hits': 2},
-                                            '즉시 보호 조치': {'keywords': ['비밀번호', '변경', '차단', '로그아웃', '오티피', '인증'], 'weight': 4, 'min_hits': 2},
+                                            '즉시 보호 조치': {'keywords': ['비밀번호', '변경', '차단', '로그아웃', 'OTP', '인증'], 'weight': 4, 'min_hits': 2},
                                             '보고/점검 요청': {'keywords': ['보고', '보안담당', '헬프데스크', '접속기록', '점검', '요청'], 'weight': 4, 'min_hits': 2}}}]},
  'fairtrade': {'title': '🛡️ 공정거래의 성',
                'briefing': {'title': '공정거래·청렴 기본 원칙 브리핑',
@@ -1711,7 +1769,7 @@ def _find_first_matching_column(columns, aliases):
     for a in alias_norms:
         if a in norm_map:
             return norm_map[a]
-    # 부분 일치 대체
+    # 부분 일치 fallback
     for c in columns:
         nc = _normalize_col_key(c)
         if any(a in nc or nc in a for a in alias_norms if a):
@@ -1932,7 +1990,7 @@ def _render_employee_lookup_popup_body(name_query: str = ""):
         if st.button("닫기", key="employee_modal_close_empty", use_container_width=True):
             st.session_state.employee_lookup_modal_open = False
             st.session_state.just_confirmed_employee = True
-            st.재실행()
+            st.rerun()
         return
 
     for col in ["employee_no", "name", "organization"]:
@@ -2009,7 +2067,7 @@ def _render_employee_lookup_popup_body(name_query: str = ""):
             emp_no_chk = str(row.get("employee_no", "")).strip()
             emp_name_chk = str(row.get("name", "")).strip()
             if _has_completed(emp_no_chk):
-                st.info(f"ℹ️ {emp_name_chk}님은 이미 2026 컴플라이언스 어드벤처를 완료했습니다.\n\n(이미 해당 교육을 완료했습니다.)")
+                st.info(f"ℹ️ {emp_name_chk}님은 이미 2026 Compliance Adventure를 완료했습니다.\n\n(Already completed the 2026 Compliance Adventure.)")
                 st.stop()
 
             st.session_state.employee_selected_record = {
@@ -2023,11 +2081,11 @@ def _render_employee_lookup_popup_body(name_query: str = ""):
                 st.toast("참가자 정보가 확인되었습니다.", icon="✅")
             except Exception:
                 pass
-            st.재실행()
+            st.rerun()
     with c2:
         if st.button("닫기", key="employee_modal_close_btn", use_container_width=True):
             st.session_state.employee_lookup_modal_open = False
-            st.재실행()
+            st.rerun()
 
 
 if hasattr(st, "dialog"):
@@ -2282,13 +2340,13 @@ def get_grade(score: int, total: int):
 
 def reset_game():
     st.session_state.clear()
-    st.재실행()
+    st.rerun()
 
 
 def reset_participant_to_intro():
-    """현재 참가자/세션의 진행 상태만 인트로 화면으로 초기화합니다.
+    """Reset only the current participant/session flow back to the intro screen.
 
-    관리자 인증 상태가 있다면 유지합니다.
+    Keeps admin authentication state if present.
     """
     keep_admin = bool(st.session_state.get("admin_authed", False))
     keep_candidates = st.session_state.get("employee_lookup_candidates", [])
@@ -2299,7 +2357,7 @@ def reset_participant_to_intro():
     st.session_state.employee_lookup_candidates = keep_candidates
     st.session_state.stage = "intro"
     scroll_to_top(0)
-    st.재실행()
+    st.rerun()
 
 
 def _derive_attempt_uid_series(df: pd.DataFrame) -> pd.Series:
@@ -2466,7 +2524,7 @@ def render_retry_offer_box(context: str):
           <div class="retry-offer-title">{title}</div>
           <div class="retry-offer-body"><b>{name}</b> ({org}) · 현재 완료 회차 <b>{completed_attempts}회</b> / 최대 <b>{max_attempts}회</b></div>
           <div class="retry-offer-desc">{desc}</div>
-          <div class="retry-offer-note">선택 시 메인 화면을 건너뛰고 스테이지 1부터 새 회차로 바로 시작합니다. (남은 재도전 기회: {remaining_after}회)</div>
+          <div class="retry-offer-note">선택 시 메인 화면을 건너뛰고 Stage 1부터 새 회차로 바로 시작합니다. (남은 재도전 기회: {remaining_after}회)</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -2475,11 +2533,11 @@ def render_retry_offer_box(context: str):
     with c1:
         if st.button("✅ 예, 다시 도전할게요", key=f"retry_yes_{context}", use_container_width=True):
             start_training_attempt_session(user, next_round, skip_to_stage="map")
-            st.재실행()
+            st.rerun()
     with c2:
         if st.button("아니오", key=f"retry_no_{context}", use_container_width=True):
             _clear_retry_offer()
-            st.재실행()
+            st.rerun()
 
 def _load_log_df():
     """
@@ -2495,7 +2553,7 @@ def _load_log_df():
             df = _coerce_log_df(df)
             if not df.empty:
                 return df, None
-        first_err = "행이 비어 있음"
+        first_err = "rows empty"
     except Exception as e1:
         first_err = str(e1)
 
@@ -2504,7 +2562,7 @@ def _load_log_df():
         df = _coerce_log_df(df)
         if not df.empty:
             return df, None
-        second_err = "데이터프레임이 비어 있음"
+        second_err = "pandas empty"
     except Exception as e2:
         second_err = str(e2)
 
@@ -2674,7 +2732,7 @@ def render_admin_password_gate():
                     st.toast("관리자 인증 완료", icon="✅")
                 except Exception:
                     pass
-                st.재실행()
+                st.rerun()
             else:
                 st.error("비밀번호가 올바르지 않습니다.")
     with c2:
@@ -2683,7 +2741,7 @@ def render_admin_password_gate():
                 st.session_state.stage = "map"
             else:
                 st.session_state.stage = "intro"
-            st.재실행()
+            st.rerun()
     st.caption("※ 보안을 위해 실제 운영 시 환경변수 COMPLIANCE_ADMIN_PASSWORD 설정을 권장합니다.")
 
 
@@ -2699,15 +2757,15 @@ def render_admin_page():
     with c1:
         if st.button("🗺️ 맵으로 돌아가기", use_container_width=True):
             st.session_state.stage = "map" if st.session_state.get("user_info") else "intro"
-            st.재실행()
+            st.rerun()
     with c2:
         if st.button("🏠 첫 화면", use_container_width=True):
             st.session_state.stage = "intro"
-            st.재실행()
+            st.rerun()
     with c3:
         if st.button("🔓 로그아웃", use_container_width=True):
             st.session_state.admin_authed = False
-            st.재실행()
+            st.rerun()
 
     
     tab_org, tab_log = st.tabs(["🏢 기관 전광판", "📄 최종 결과 로그"])
@@ -2905,7 +2963,7 @@ def render_conquer_fx_if_needed():
 
 
 def render_guardian_map():
-    st.subheader("🗺️ 가디언의 지도")
+    st.subheader("🗺️ Guardian’s Map")
 
     map_img = get_current_map_image()
     cleared_cnt = len(st.session_state.get("completed", []))
@@ -2993,12 +3051,12 @@ def render_briefing(m_key: str):
     with c1:
         if safe_button("📝 퀴즈 시작", use_container_width=True, primary=True):
             st.session_state.stage = "quiz"
-            st.재실행()
+            st.rerun()
     with c2:
         if st.button("🗺️ 맵으로 돌아가기", use_container_width=True):
             st.session_state.current_mission = None
             st.session_state.stage = "map"
-            st.재실행()
+            st.rerun()
 
 
 
@@ -3006,7 +3064,7 @@ def render_briefing(m_key: str):
 def get_mcq_option_order(m_key: str, q_idx: int, n_options: int):
     """객관식 보기(4지선다 등) 순서를 참가자/회차별로 무작위로 섞어 표시합니다.
 
-    - 같은 참가자(같은 회차)에서는 화면이 리런(재실행)되어도 순서가 유지됩니다.
+    - 같은 참가자(같은 회차)에서는 화면이 리런(re-run)되어도 순서가 유지됩니다.
     - 참가자/회차가 달라지면(재도전 포함) 보기 순서가 달라집니다.
     """
     store = st.session_state.setdefault('mcq_option_orders', {})
@@ -3055,7 +3113,7 @@ def render_mcq_question(m_key: str, q_idx: int, q_data: dict):
         with c_edit:
             if st.button("✏️ 답안 수정하기", key=f"edit_mcq_{m_key}_{q_idx}", use_container_width=True):
                 submissions.pop(q_idx, None)
-                st.재실행()
+                st.rerun()
         with c_hint:
             st.caption("이전/다음 문제 버튼으로 이동할 수 있습니다. 수정 후 다시 제출하면 최신 답안 기준으로 점수가 반영됩니다.")
         return
@@ -3110,7 +3168,7 @@ def render_mcq_question(m_key: str, q_idx: int, q_data: dict):
                 "awarded_score": awarded,
             },
         )
-        st.재실행()
+        st.rerun()
 
 
 def render_text_question(m_key: str, q_idx: int, q_data: dict):
@@ -3178,7 +3236,7 @@ def render_text_question(m_key: str, q_idx: int, q_data: dict):
         with c_edit:
             if st.button("✏️ 답안 수정하기", key=f"edit_text_{m_key}_{q_idx}", use_container_width=True):
                 submissions.pop(q_idx, None)
-                st.재실행()
+                st.rerun()
         with c_hint:
             st.caption("이전/다음 문제 버튼으로 이동할 수 있습니다. 수정 후 다시 제출하면 최신 답안 기준으로 점수가 반영됩니다.")
         return
@@ -3199,7 +3257,7 @@ def render_text_question(m_key: str, q_idx: int, q_data: dict):
         st.markdown(
             f"""
             <div class='card'>
-              <div class='card-title'>🧩 예시 답안</div>
+              <div class='card-title'>🧩 Sample Answer (예시)</div>
               <div style='line-height:1.55;'>{sample_answer}</div>
               <div style='margin-top:8px; color:#B7C7E6; font-size:0.88rem;'>
                 ※ 예시는 작성 방향(원칙 설명 + 대안 제시)을 보여주는 참고 문장입니다. 그대로 복사하지 말고 본인 표현으로 바꿔 작성하세요.
@@ -3253,7 +3311,7 @@ def render_text_question(m_key: str, q_idx: int, q_data: dict):
                 "awarded_score": eval_res["awarded_score"],
             },
         )
-        st.재실행()
+        st.rerun()
 
 
 def render_quiz_navigation_controls(m_key: str):
@@ -3275,18 +3333,18 @@ def render_quiz_navigation_controls(m_key: str):
     with c1:
         if st.button("◀ 이전 문제", key=f"nav_prev_{m_key}_{idx}", use_container_width=True, disabled=(idx <= 0)):
             progress["current_idx"] = max(0, idx - 1)
-            st.재실행()
+            st.rerun()
     with c2:
         if idx < total_q - 1:
             if safe_button("다음 문제 ▶", key=f"nav_next_{m_key}_{idx}", use_container_width=True, disabled=(not current_submitted), primary=True):
                 progress["current_idx"] = min(total_q - 1, idx + 1)
-                st.재실행()
+                st.rerun()
         else:
             all_submitted = len(submissions) == total_q
             mark_theme_complete_if_ready(m_key)
             if safe_button("🏁 테마 정복 완료! 맵으로 돌아가기", key=f"nav_finish_{m_key}", use_container_width=True, disabled=(not all_submitted), primary=True):
                 st.session_state.stage = "map"
-                st.재실행()
+                st.rerun()
 
 
 def render_quiz(m_key: str):
@@ -3347,7 +3405,7 @@ def render_quiz(m_key: str):
 
         if st.button("🗺️ 맵으로 나가기", key=f"back_map_{m_key}", use_container_width=True):
             st.session_state.stage = "map"
-            st.재실행()
+            st.rerun()
 
     with col_right:
         st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
@@ -3394,18 +3452,18 @@ if pending:
         attempt_round=int(pending.get("attempt_round", 1) or 1),
         skip_to_stage=str(pending.get("skip_to_stage", "map") or "map"),
     )
-    st.재실행()
+    st.rerun()
 with st.sidebar:
     # 사이드바에는 관리자 대시보드만 노출합니다. (기관 전광판은 관리자 대시보드 내에서만 확인)
     st.caption("관리자")
     if st.button("🔐 관리자 대시보드", use_container_width=True):
 
         st.session_state.stage = "admin"
-        st.재실행()
+        st.rerun()
     if st.session_state.get("admin_authed", False):
         if st.button("🔓 관리자 로그아웃", use_container_width=True):
             st.session_state.admin_authed = False
-            st.재실행()
+            st.rerun()
 
 try:
     if st.session_state.stage == "intro":
@@ -3418,14 +3476,14 @@ try:
             st.info("맵 이미지를 추가하면 인트로 연출이 더 좋아집니다.")
 
         st.markdown("<div style='height:10px;'></div>", unsafe_allow_html=True)
-        st.title("🛡️ 2026 컴플라이언스 어드벤처")
-        st.caption("가디언 트레이닝 · 컴플라이언스 테마 정복형 학습")
+        st.title("🛡️ 2026 Compliance Adventure")
+        st.caption("Guardian Training · 컴플라이언스 테마 정복형 학습")
 
         st.markdown(
             """
             <div class='card'>
               <div class='card-title gold-text'>교육 방식</div>
-              <div class='gold-text'>맵에서 테마 선택 → 핵심 브리핑 학습 → 퀴즈(객관식 4지선다 + 주관식) → 정복 완료!</div>
+              <div class='gold-text'>Select a theme from the map → Study the core briefing → Quiz (4 choices + short answer) → Conquer completed!</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -3449,7 +3507,7 @@ try:
             st.session_state.employee_lookup_candidates = []
             st.session_state.employee_selected_record = None
             st.session_state.employee_lookup_modal_open = False
-            st.재실행()
+            st.rerun()
 
         if lookup_clicked:
             q = (name_query or "").strip()
@@ -3476,7 +3534,7 @@ try:
             st.caption("최근 조회 결과가 있습니다. 다시 확인하려면 아래 버튼을 누르세요.")
             if st.button("📋 조회 결과 팝업 다시 열기", use_container_width=True, key="reopen_employee_popup"):
                 st.session_state.employee_lookup_modal_open = True
-                st.재실행()
+                st.rerun()
 
         selected_emp = st.session_state.get("employee_selected_record")
         if selected_emp:
@@ -3520,10 +3578,10 @@ try:
                         st.error('이 참가자는 최대 참여 횟수(총 3회)를 모두 사용했습니다. 관리자에게 문의해주세요.')
                     elif completed_attempts >= 1:
                         _set_retry_offer(user_info, completed_attempts, context='intro')
-                        st.재실행()
+                        st.rerun()
                     else:
                         st.session_state.pending_start_training = {'user_info': user_info, 'attempt_round': 1, 'skip_to_stage': 'map'}
-                        st.재실행()
+                        st.rerun()
                 else:
                     st.warning('참가자 확인 정보를 다시 선택해주세요.')
         render_retry_offer_box("intro")
@@ -3575,7 +3633,7 @@ try:
                         st.session_state.current_mission = m_key
                         ensure_quiz_progress(m_key)
                         st.session_state.stage = "briefing"
-                        st.재실행()
+                        st.rerun()
                 else:
                     st.markdown(
                         """
@@ -3599,7 +3657,7 @@ try:
         if len(st.session_state.completed) == len(SCENARIO_ORDER):
             if st.button("최종 결과 보기", use_container_width=True):
                 st.session_state.stage = "ending"
-                st.재실행()
+                st.rerun()
 
     elif st.session_state.stage == "briefing":
         render_top_spacer()
@@ -3607,12 +3665,12 @@ try:
         if not m_key or m_key not in SCENARIOS:
             st.warning("테마 정보가 없어 지도로 돌아갑니다.")
             st.session_state.stage = "map"
-            st.재실행()
+            st.rerun()
 
         if m_key in st.session_state.completed:
             st.info("이미 정복한 테마입니다. 지도로 돌아갑니다.")
             st.session_state.stage = "map"
-            st.재실행()
+            st.rerun()
 
         render_briefing(m_key)
 
@@ -3622,7 +3680,7 @@ try:
         if not m_key or m_key not in SCENARIOS:
             st.warning("퀴즈 정보가 없어 지도로 돌아갑니다.")
             st.session_state.stage = "map"
-            st.재실행()
+            st.rerun()
 
         ensure_quiz_progress(m_key)
         if len(st.session_state.quiz_progress[m_key]["submissions"]) == len(SCENARIOS[m_key]["quiz"]):
@@ -3645,7 +3703,7 @@ try:
         wrong_like = sum(1 for r in st.session_state.attempt_history if str(r.get("is_correct", "")) in ["N", "PARTIAL"])
 
         st.balloons()
-        st.title("🏆 가디언 트레이닝 완료")
+        st.title("🏆 Guardian Training Complete")
         st.success(f"{user_name} 가디언님, 모든 테마를 정복했습니다!")
 
         _ending_img = get_ending_image()
@@ -3715,7 +3773,7 @@ try:
         st.markdown("<div class='brief-actions-wrap'></div>", unsafe_allow_html=True)
         c1, c2 = st.columns([1, 1], gap='large')
         with c1:
-            if safe_button("✅ 최종 제출", use_container_width=True, primary=True):
+            if safe_button("✅ 최종 제출(Submit)", use_container_width=True, primary=True):
                 # Final results are persisted ONLY when the learner explicitly submits.
                 save_final_result_if_needed(force=True)
                 reset_participant_to_intro()
@@ -3725,7 +3783,7 @@ try:
             if challenge_used:
                 st.caption("재도전은 1회만 가능합니다. 최종 제출로 완료를 확정해 주세요.")
             if st.button("🔄 다시 도전(Challenge again)", use_container_width=True, disabled=challenge_used):
-                # Restart from 스테이지 1 (first mission briefing) WITHOUT persisting any final result.
+                # Restart from Stage 1 (first mission briefing) WITHOUT persisting any final result.
                 # Mark re-challenge consumed (1 game + 1 re-challenge).
                 st.session_state["challenge_used"] = True
                 u = st.session_state.get("user_info", {}) or {}
@@ -3738,7 +3796,7 @@ try:
                     st.session_state.current_mission = SCENARIO_ORDER[0]
                     st.session_state.stage = "briefing"
                     scroll_to_top(80)
-                    st.재실행()
+                    st.rerun()
 
     else:
         st.error("알 수 없는 stage입니다. 앱을 다시 시작해주세요.")
