@@ -1611,7 +1611,7 @@ TOTAL_SCORE = sum(sum(q.get("score", 0) for q in SCENARIOS[m]["quiz"]) for m in 
 # =========================================================
 def init_state():
     defaults = {
-        "stage": "intro",  # intro -> map -> briefing -> quiz -> ending
+        "stage": "intro",  # intro -> propensity_test -> map -> briefing -> quiz -> ending
         "user_info": {},
         "current_mission": None,
         "completed": [],
@@ -1638,6 +1638,9 @@ def init_state():
         "employee_lookup_modal_open": False,
         "just_confirmed_employee": False,
         "retry_offer": None,
+        "propensity_answers": {},
+        "propensity_completed": False,
+        "propensity_result": "",
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -2806,7 +2809,15 @@ def render_retry_offer_box(context: str):
     c1, c2 = st.columns([1, 1], gap="large")
     with c1:
         if st.button("✅ 예, 다시 도전할게요", key=f"retry_yes_{context}", use_container_width=True):
-            start_training_attempt_session(user, next_round, skip_to_stage="map")
+            st.session_state.pending_start_training = {
+                "user_info": user,
+                "attempt_round": int(next_round),
+                "skip_to_stage": "map",
+            }
+            st.session_state.propensity_answers = {}
+            st.session_state.propensity_completed = False
+            st.session_state.propensity_result = ""
+            st.session_state.stage = "propensity_test"
             st.rerun()
     with c2:
         if st.button("아니오", key=f"retry_no_{context}", use_container_width=True):
@@ -3336,6 +3347,107 @@ def render_admin_question_stats():
 # 6) UI 조각들 (맵, 브리핑, 퀴즈)
 # =========================================================
 
+PROPENSITY_TEST_QUESTIONS = [
+    {
+        "key": "risk_action",
+        "question": "업무 일정이 촉박할 때, 나는 절차보다 속도를 우선하는 편이다.",
+        "options": ["전혀 그렇지 않다", "그렇지 않은 편이다", "그런 편이다", "매우 그렇다"],
+    },
+    {
+        "key": "reporting",
+        "question": "규정 위반 가능성이 보이면, 불편하더라도 즉시 보고/문의한다.",
+        "options": ["전혀 그렇지 않다", "그렇지 않은 편이다", "그런 편이다", "매우 그렇다"],
+    },
+    {
+        "key": "documentation",
+        "question": "구두 지시보다는 근거 문서(메일/승인 기록)를 남기려는 편이다.",
+        "options": ["전혀 그렇지 않다", "그렇지 않은 편이다", "그런 편이다", "매우 그렇다"],
+    },
+]
+
+
+def render_propensity_test():
+    st.title("🧭 컴플라이언스 성향 테스트")
+    st.caption("간단한 사전 진단입니다. 학습 흐름에는 영향을 주지 않으며, 결과는 이번 세션 안내용으로만 사용됩니다.")
+
+    st.markdown(
+        """
+        <div class='card'>
+          <div class='card-title'>안내</div>
+          <div>각 문항을 선택한 뒤 결과 확인을 누르세요. 완료 후 기존 학습 흐름(맵 진입)으로 이어집니다.</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    answers = st.session_state.setdefault("propensity_answers", {})
+
+    for idx, q in enumerate(PROPENSITY_TEST_QUESTIONS, start=1):
+        st.markdown(
+            f"""
+            <div class='quiz-question-box'>
+              <div class='quiz-question-kicker'>DIAGNOSIS {idx}</div>
+              <div class='quiz-question-title' style='font-size:1.35rem;'>Q{idx}. {html.escape(q['question'])}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        selected = st.radio(
+            f"성향 문항 {idx}",
+            q["options"],
+            index=None if q["key"] not in answers else q["options"].index(answers[q["key"]]),
+            key=f"propensity_radio_{q['key']}",
+            label_visibility="collapsed",
+        )
+        if selected is not None:
+            answers[q["key"]] = selected
+
+    score_map = {"전혀 그렇지 않다": 0, "그렇지 않은 편이다": 1, "그런 편이다": 2, "매우 그렇다": 3}
+
+    c1, c2 = st.columns([1, 1], gap="large")
+    with c1:
+        if safe_button("결과 확인", use_container_width=True, primary=True):
+            if len(answers) < len(PROPENSITY_TEST_QUESTIONS):
+                st.warning("모든 문항에 응답해 주세요.")
+                st.stop()
+
+            risk_bias = score_map.get(answers.get("risk_action", ""), 0)
+            report_bias = score_map.get(answers.get("reporting", ""), 0)
+            doc_bias = score_map.get(answers.get("documentation", ""), 0)
+            compliance_score = (3 - risk_bias) + report_bias + doc_bias
+
+            if compliance_score >= 7:
+                result = "원칙준수형 ✅"
+            elif compliance_score >= 4:
+                result = "균형형 ☑️"
+            else:
+                result = "리스크주의형 ⚠️"
+
+            st.session_state.propensity_result = result
+            st.session_state.propensity_completed = True
+            st.rerun()
+    with c2:
+        if st.button("이전으로", use_container_width=True):
+            st.session_state.stage = "intro"
+            st.rerun()
+
+    if st.session_state.get("propensity_completed", False):
+        result = st.session_state.get("propensity_result", "")
+        st.success(f"테스트 완료: {result}")
+        st.caption("이 결과는 자기 점검용 안내이며, 기존 점수/관리자 집계/최종 저장 로직에는 반영되지 않습니다.")
+        if safe_button("🗺️ 맵으로 이동", use_container_width=True, primary=True):
+            pending = st.session_state.get("pending_start_training")
+            if pending:
+                start_training_attempt_session(
+                    pending.get("user_info", {}),
+                    attempt_round=int(pending.get("attempt_round", 1) or 1),
+                    skip_to_stage=str(pending.get("skip_to_stage", "map") or "map"),
+                )
+                st.session_state.pending_start_training = None
+            else:
+                st.session_state.stage = "map"
+            st.rerun()
+
 def render_conquer_fx_if_needed():
     if not st.session_state.get("show_conquer_fx", False):
         return
@@ -3856,7 +3968,7 @@ if _prev != _cur:
 # Streamlit은 위젯(key=...)이 이미 생성된 실행(run)에서 같은 key를 코드로 덮어쓰면
 # StreamlitAPIException을 발생시킬 수 있습니다. (직원 화면에 에러/코드 노출 → 신뢰 저하)
 pending = st.session_state.pop("pending_start_training", None)
-if pending:
+if pending and st.session_state.get("stage") != "propensity_test":
     # pending에는 user_info / attempt_round / skip_to_stage만 들어있도록 설계
     start_training_attempt_session(
         pending.get("user_info", {}),
@@ -3864,6 +3976,9 @@ if pending:
         skip_to_stage=str(pending.get("skip_to_stage", "map") or "map"),
     )
     st.rerun()
+elif pending:
+    # 성향 테스트 단계에서는 pending payload를 유지하고, 완료 후 시작한다.
+    st.session_state.pending_start_training = pending
 with st.sidebar:
     # 사이드바에는 관리자 대시보드만 노출합니다. (기관 전광판은 관리자 대시보드 내에서만 확인)
     st.caption("관리자")
@@ -3994,10 +4109,18 @@ try:
                         st.rerun()
                     else:
                         st.session_state.pending_start_training = {'user_info': user_info, 'attempt_round': 1, 'skip_to_stage': 'map'}
+                        st.session_state.propensity_answers = {}
+                        st.session_state.propensity_completed = False
+                        st.session_state.propensity_result = ""
+                        st.session_state.stage = "propensity_test"
                         st.rerun()
                 else:
                     st.warning('참가자 확인 정보를 다시 선택해주세요.')
         render_retry_offer_box("intro")
+
+    elif st.session_state.stage == "propensity_test":
+        render_top_spacer()
+        render_propensity_test()
 
     elif st.session_state.stage == "map":
         # Ensure the title is visible immediately after navigation.
